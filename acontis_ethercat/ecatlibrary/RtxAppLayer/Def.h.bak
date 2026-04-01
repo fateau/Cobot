@@ -1,0 +1,452 @@
+﻿#pragma once
+
+
+#ifdef UNDER_RTSS
+	#define KING_STAR_IO			
+#else
+	#define WIN32_SIMULATE
+#endif
+
+//==========================================
+
+
+#include <Windows.h>
+#if defined UNDER_RTSS
+#include <Rtapi.h>
+#endif
+
+#include "Eigen\Dense"
+#include "MathTool.h"
+#include <stdint.h>
+
+#if defined KING_STAR_IO
+	#ifdef _AMD64_
+	#include "KingStarIO\coe64.h"
+	#else
+	#include "KingStarIO\coe32.h"
+	#endif
+typedef unsigned char	U8_T;
+typedef short			I16_T;
+typedef unsigned short	U16_T;   // 0 ~ 65535
+typedef unsigned int	U32_T;   // 0 ~ 4294967295
+#define RETURN return 0
+
+#elif defined WIN32_SIMULATE
+typedef unsigned char	U8_T;
+typedef short			I16_T;
+typedef unsigned short	U16_T;   // 0 ~ 65535
+typedef unsigned int	U32_T;   // 0 ~ 4294967295
+#define RETURN return
+#endif
+
+#define MAX_SLAVE_NUM		30	// slave = motor + io + adaptor + ...
+#define MAX_MOTOR_NUM		30
+#define MAX_IO_NUM			32	// io Module.
+#define MAX_INP_BYTE_PER_IO 4
+#define MAX_OUT_BYTE_PER_IO 4
+#define MAX_MOTOR_PER_ROBOT 7
+#define MAX_REDUNDANCY		7	// xyzabc 
+#define MAX_ROBOT_NUM		4
+#define MAX_TOOL_NUM		10
+#define MAX_BASE_NUM		10
+#define MAX_POINT_NUM		100
+#define MAX_SYNC_NUM		100
+#define MAX_IO_CMD_NUM		10
+#define ERROR_MSG_LEN		256 
+
+#define SAMPLING_T			1e-3
+#define SAMPLING_T_INV		1000
+
+// vendorID
+#define SYNAPTICON  8914
+
+// Script
+#define RAWQ_SIZE	10
+#define PPQ_SIZE	10
+#define INTPQ_SIZE  200
+#define INTPQ_REMAIN_NUM 200	// 遇到變速時，intpQ保留用來緩衝的個數
+ 
+#define FIXED_FRAME 
+//#define EULER
+
+using namespace Eigen;
+// Note:如果用visual studio 2012, 就可以用scoped enum 語法:
+// enum class eSlaveType, 可在不同enum內重複命名。
+namespace eError
+{
+	enum e {
+		NONE,
+		SCRIPT,
+		IK_FAIL,			//1~99:軟體錯誤
+		ANGLE_LIMIT,
+		AXIS_JUMP,
+		DRIVER_ERROR = 100, //100~199:硬體錯誤
+		DRIVER_POWER_OFF,
+		LINK_BROKEN,
+	};
+}
+namespace eRTXState{
+	enum e {
+		CLOSE,
+		OPEN,
+		RUNNING
+	};
+}
+namespace eRTXMode{
+	enum e {
+		CSP = 8,
+		CSV = 9,
+		CST = 10
+	};
+}
+namespace eRobotType{
+	enum e {
+		None  = 0,
+        Axis6 = 400,
+		Ext   = 600, //add by yunyu 20250502
+		Cobot = 800 //add by yunyu 20250401
+	};
+};
+namespace eProject
+{
+	enum e{
+		NONE,
+		BASIC		//教學示範用，最陽春
+	};
+};
+
+// 指令的型式
+namespace eTargetFormat {
+	enum e {
+		AXIS,
+		POSE
+	};
+};
+namespace eCmdFormat { // 僅在 raw → path (鋪起、終點) 裡使用
+	enum e {
+		UNKNOWN,
+		AXIS,
+		POSE,
+		PT_TCP,
+		PT_AXIS
+	};
+};
+namespace eCmdSource {
+	enum e {
+		NONE,
+		JOG,
+		SCRIPT 
+	};
+};
+namespace eFrame {
+	enum e {
+		BASE,
+		TOOL
+	};
+};
+// ToolBase
+namespace eToolBaseType {
+	enum e {
+		TOOL,
+		BASE
+	};
+};
+
+// 劇本命令相關
+namespace eScriptCmdType {
+	enum e {
+		MOVE,
+		IO_OUT,
+		DELAY,
+		SYNC,
+		HMI_SYNC,
+		MS
+	};
+};
+namespace eMovePathType {
+	enum e {
+		JOINT,
+		P2P,
+		LINE,
+		CIRCLE,
+		
+	};	
+};
+namespace ePlanAttitudeType {
+	enum e {
+		ABC,
+		R
+	};	
+};
+namespace ePlanAttitudeDescriptionType {
+	enum e {
+		EULER,
+		FIXED_FRAME
+	};	
+};
+namespace eJointType {
+	enum e{
+		REVOLUTE,
+		PRISMATIC
+	};
+};
+namespace eSyncState {
+	enum e{
+		NONE,
+		READY,
+		NOT_YET
+	};
+};
+namespace eSyncType {
+	enum e{
+		NORMAL,
+		NONE
+	};
+};
+
+// 插補
+namespace eIntpResult
+{
+	enum e{
+		FAIL = -1,	//插補失敗
+		SUCCESS,	//插補成功
+		NOTSET		//沒產生新插補
+	};
+};
+
+namespace eLogic
+{
+	enum e{
+		AND,
+		OR
+	};
+};
+
+struct RobotDeclareData {
+	int		motorNum;
+	int		gestureNum;
+	eRobotType::e	robotType;
+	double	refRoot[6];			//參考座標到基座的轉換矩陣
+};
+struct EcatMappingData {
+	int	robotInd;
+	int	axisInd;
+};
+struct DHtable
+{
+	double a			[MAX_MOTOR_PER_ROBOT];
+	double alphaDeg		[MAX_MOTOR_PER_ROBOT];
+	double d			[MAX_MOTOR_PER_ROBOT];
+	double thetasInit	[MAX_MOTOR_PER_ROBOT]; //Home 角度
+	double thetaShiftDeg[MAX_MOTOR_PER_ROBOT]; 
+
+	double axisPositiveLimit[MAX_MOTOR_PER_ROBOT];
+	double axisNegativeLimit[MAX_MOTOR_PER_ROBOT];
+
+	eJointType::e jointType[MAX_MOTOR_PER_ROBOT];
+	double deg2mmRatio;
+
+	// function
+	void getT(Matrix4d &out_T, double axisDeg, int id)
+	{
+		double A, D, sa, ca, cs, ss;
+		id -= 1; 
+
+		// A
+		A = a[id];
+			
+		// alpha
+		sa = sin( alphaDeg[id] * DEG2RAD);
+		ca = cos( alphaDeg[id] * DEG2RAD);
+
+		switch( jointType[id] )
+		{
+			case eJointType::REVOLUTE :
+				// D
+				D = d[id];
+			
+				// theta
+				ss = sin( axisDeg * DEG2RAD);
+				cs = cos( axisDeg * DEG2RAD);
+				break;
+
+			case eJointType::PRISMATIC :
+				// D
+				D = axisDeg; // deg → mm
+			
+				// theta
+				ss = sin( thetasInit[id] * DEG2RAD);
+				cs = cos( thetasInit[id] * DEG2RAD);
+		}
+		
+		out_T(0,0) =	  cs;	out_T(0,1) =	 -ss;	out_T(0,2) =   0;    out_T(0,3) =		A;
+		out_T(1,0) = ss * ca;	out_T(1,1) = cs * ca;   out_T(1,2) = -sa;    out_T(1,3) = -sa * D;
+		out_T(2,0) = ss * sa;	out_T(2,1) = cs * sa;   out_T(2,2) =  ca;    out_T(2,3) =  ca * D;  
+		out_T(3,0) =	   0;	out_T(3,1) =	   0;   out_T(3,2) =   0;    out_T(3,3) =		1; 
+	    
+		/*
+			  [			 cos(θ)		  		 -sin(θ)		 0				  A	]
+		  T = [	sin(θ) * cos(α)		 cos(θ) * cos(α)	-sin(α)		-sin(α) * D	]
+			  [	sin(θ) * sin(α)		 cos(θ) * sin(α)	 cos(α)		 cos(α) * D	]
+			  [				 0					  0			 0				  1	]
+		*/
+	}
+};
+struct MSPose	//Master-Slave 的一組Pose
+{
+	double M_pre_pose[6];
+	double S_pre_pose[6];
+	double M_target_pose[6];
+	double S_target_pose[6];
+};
+
+// Jog命令
+struct JogCmd
+{
+	int		r;
+	bool	isUserPressJOG;
+	bool	isLimitDist;
+	double	acc;
+	int		ind;
+	double	vel;  
+	double	dist;
+};
+
+// 劇本命令
+struct CircleData
+{
+	double	th_Final;
+	double	R;
+	double	center[3];
+	Vector3d uNormal;
+	Vector3d uStart;
+};
+struct IOData
+{
+	int			moduleInd;
+	int			bitInd;
+	bool		status;	// On or Off
+	eLogic::e	logic;	// && or ||
+};
+struct MoveData
+{
+	double	maxV, maxA;
+	double	contD;				  // 連續運動百分比，<=0 表示沒有連續
+};
+struct CmdMoveRaw
+{
+	eCmdFormat::e		format;		//pose, axis or point.
+	eMovePathType::e	pathType;	//p2p, line or circle.
+	eFrame::e			frame;		//Base or Tool
+	BOOL				isAbs;		//abs or rel
+
+	// --- 每次只用其中一部分 ---
+	int scriptBaseIndex;
+	int scriptToolIndex;
+	int pointBaseIndex;						// for 記點
+	int pointToolIndex;
+
+	double	Pose    [MAX_REDUNDANCY];
+	BOOL	PoseMask[MAX_REDUNDANCY];	
+
+	double	axis    [MAX_MOTOR_PER_ROBOT];
+	BOOL	axisMask[MAX_MOTOR_PER_ROBOT];
+
+	double	Pose2[MAX_REDUNDANCY];		// for CIRCLE
+	double	theta;
+	int		pointBaseIndex2;
+	int		pointToolIndex2;	
+
+	MoveData mvData;
+};
+struct CmdMove	//transferred from CmdMoveRaw
+{
+	eCmdFormat::e		format;		//pose, axis or point.
+	eMovePathType::e	pathType;	//p2p, line or circle.
+
+	// --- 每次只用其中一部分 ---
+	int preToolId;
+	int nowToolId;
+
+	double	startPose[MAX_REDUNDANCY];
+	double    midPose[MAX_REDUNDANCY];
+	double	  endPose[MAX_REDUNDANCY];
+
+	double	startAxis[MAX_MOTOR_PER_ROBOT];
+	double	  endAxis[MAX_MOTOR_PER_ROBOT];
+
+	double	startVs[MAX_MOTOR_PER_ROBOT];
+	double	  endVs[MAX_MOTOR_PER_ROBOT];
+
+	CircleData circle;
+	double	th_User; //User defined theta of the Circle-Path.
+	
+	double  maxVs[MAX_MOTOR_PER_ROBOT];  // 若maxV為百分比時，maxVs[i] =該軸額定轉速 * maxV/100。
+	double  maxAs[MAX_MOTOR_PER_ROBOT];  // 同maxVs.
+
+	MoveData mvData;
+};
+
+struct CmdIo
+{
+	char ioCmdNum;
+	IOData io[MAX_IO_CMD_NUM];
+};
+struct CmdDelay
+{
+	int	time; //ms
+};
+struct CmdSync
+{
+	eSyncType::e type;
+	int	syncId;
+};
+
+struct CmdBasicInfo
+{
+	int lineId;					//在劇本中的行數
+	int funcId;					//副程式編號
+	int myMasterId;				//正在跟隨的 Master編號。 -1 表示沒有跟隨任何Master。
+	eScriptCmdType::e	type;	//路徑類型
+};
+struct ScriptRawCmd
+{
+	CmdBasicInfo info;
+
+	CmdMoveRaw	cmdMoveRaw;
+	CmdIo		cmdIo;
+	CmdDelay	cmdDelay;
+	CmdSync		cmdSync;
+};
+struct ScriptPathCmd //從 ScriptCmdRaw 計算而來
+{
+	CmdBasicInfo info;
+
+	CmdMove	    cmdMove;
+	CmdIo		cmdIo;
+	CmdDelay	cmdDelay;
+	CmdSync		cmdSync;
+};
+struct IntpCmd //插補完的命令。可以在myCallBack直接喂給motor.
+{
+	CmdBasicInfo info;
+	int toolIndex;
+
+	eTargetFormat::e	format;
+	double	axisDeg[MAX_MOTOR_PER_ROBOT];
+	double	axisVel[MAX_MOTOR_PER_ROBOT];
+	double	axisAcc[MAX_MOTOR_PER_ROBOT];
+
+	double	Pose		 [MAX_REDUNDANCY];
+	double	nowDs;			//距離起點已行走的距離
+	double	nowVs;			//此瞬間的速度
+	double  maxDecs;		//在降速區的最大降速度
+	bool	isFinalRegion;	//是否在降速區
+	bool	isContOverlap;	//是否在continue重疊區	
+	bool	isParallel;		//是否為平行命令 (處理時不占用1ms)
+
+	//type == 其他參數 io, delay, etc
+	CmdIo		cmdIo;
+	CmdDelay	cmdDelay;
+	CmdSync		cmdSync;
+};

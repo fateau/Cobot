@@ -1,0 +1,521 @@
+﻿#include <stdio.h>
+#include <Windows.h>
+#include "MySystem.h"
+#include "Script.h"
+#include "Simulator.h"
+#include "Eigen\src\Core\products\Parallelizer.h"
+#include "Shm.h"
+#include "ErrorHandler.h"
+
+// 看能不能省略掉 (把相關呼叫改寫至 MySystem成員函式)
+#include "Jog.h"
+#include "Motor.h"
+#include "Robot.h"
+#include "IOGroup.h"
+#include "CmdContext.h"
+#include "EventHandler.h"
+#include "Kinematics.h"
+#include "Debug.h"
+#include "MyCallback.h"
+
+
+SHMData*  shm = NULL;
+MySystem* sys;
+
+HANDLE	hScriptStartThread;
+HANDLE	hScriptHMIThread		[MAX_ROBOT_NUM];
+HANDLE	hScriptPlanningThread	[MAX_ROBOT_NUM];
+HANDLE	hScriptInterpThread		[MAX_ROBOT_NUM];
+HANDLE	hLogThread;	
+
+
+// ============================================================================================
+
+void waitForHMI() // 等待人機設定好 mapping 
+{
+#if defined WIN32_SIMULATE
+	WaitForSingleObject(sys->evtHMICommand, INFINITE);	// 為了Debug可以註解掉 
+#else
+	WaitForSingleObject(sys->evtHMICommand, INFINITE);	// 不要註解掉
+#endif
+}
+
+bool OpenScriptThread();
+bool OpenLogThread();
+void closeThread();
+void logThread();
+
+// =================== MyCallBack  ======================
+#define CLOCK_2 2
+
+#if defined KING_STAR_IO 
+	int __stdcall MyCallBack(void *Context, int MasterState)
+#else
+void CALLBACK MyCallBack(UINT uTimerID, UINT uMsg, DWORD dwUser, DWORD dummy1, DWORD dummy2)
+#endif
+{	
+	static int count = 0;
+	if(count++ == 2000) count = 0;	//每2 sec重置
+	int r,ret;
+
+	#if defined KING_STAR_IO
+	if(shm->stopRTX == (int)true) RETURN;
+	if(shm->RTXState != eRTXState::RUNNING) RETURN;	
+	shm->ecatState = MasterState;
+	if(shm->ecatState != 8) RETURN; //8: eEcatState_OP in 32bit;  kseToInit in 64 bit
+	sys->processMotorStatus();	//將馬達轉至 servoOn/Off		
+	#endif
+
+	sys->ioGroup->updateData();		 //更新IO資訊
+	sys->isServoOn();					             //檢查馬達是否Servo On。
+	if(sys->updateData() < 0) {			//更新robot姿態數值。重置
+
+		// 若馬達有Error，急停劇本
+		shm->isSlowStop = false;
+		shm->stopScript = true;
+	}	
+
+	static eRTXMode::e currentRTXMode = eRTXMode::CSP; // 預設為CSP
+
+	// change all motor mode
+	if(currentRTXMode != shm->RTXMode) 
+	{
+		Debug::writeln(0, "Mycallback:  currentMode:%d, shm->RTXMode:%d\n", currentRTXMode, shm->RTXMode);
+		currentRTXMode = shm->RTXMode;
+
+		for(r = 0; r< sys->robotNum; r++) { 			
+			Robot* robot = sys->robots[r];
+			robot->isNeedMove = true;
+
+			for(int m = 0; m<robot->motorNum; m++) {
+				robot->axisDegCmd[m]	 = robot->axisDegNow[m];      //為了切回CSP時不跳點。
+				robot->axisDegCmdPrev[m] = robot->axisDegNow[m]; //為了切回CSP時不跳點。
+				robot->motors[m]->setMode(shm->RTXMode);
+			}
+		}
+	}
+
+	//人機命令處理 - 判斷 CSP 或 CST
+	if(currentRTXMode == eRTXMode::CSP) 
+	{
+		if(shm->isScriptRunning) mcDoScript();
+		else				     mcDoJog();	
+
+		for(r = 0; r< sys->robotNum; r++) 
+			sys->robots[r]->writeNextAxisForAllMotors();
+	}
+	else if(currentRTXMode == eRTXMode::CST) 
+	{					
+		for(r = 0; r< sys->robotNum; r++) 
+			sys->robots[r]->writeNextTorqForAllMotors();
+	}
+
+	// 送出IO命令到Ecat
+	sys->ioGroup->setEcatOutput();
+
+	RETURN;
+}
+
+bool OpenShareMemory()
+{
+	// Open Shared Memory.  *** do this before anything else ***
+	int shm_size = sizeof(SHMData);
+	HANDLE	shmHandle;
+    #if defined UNDER_RTSS
+	    shmHandle = RtOpenSharedMemory(SHM_MAP_WRITE, FALSE, "RtxShmSpace", (void **)&shm);
+    #else
+        shmHandle = OpenFileMapping(FILE_MAP_ALL_ACCESS, false, TEXT("DataSpace"));
+        LPVOID ptr = MapViewOfFile(shmHandle, FILE_MAP_ALL_ACCESS, 0, 0, shm_size);
+        shm = (SHMData*)ptr;
+    #endif
+
+	if (shmHandle == NULL) { 
+		printf("Open Shared Memory() error\n");
+	    return false; 
+	}
+	shm->RTXState = eRTXState::OPEN;
+	printf("Open SharedMemory. shmata_size = %d\n", sizeof(SHMData));
+
+	return true;
+}
+bool OpenEthercat()
+{
+	// init EtherCat parameters.
+    #if defined KING_STAR_IO 
+    #ifdef _AMD64_ //64bit
+    	if (RtEcatCreateMaster() != NO_ERROR)              return false;
+    	if (RtEcatSetNIC("-i8254x", shm->NIC) != NO_ERROR) return false;
+    	if (RtEcatSetActualTorque(false) != NO_ERROR)       return false;
+    	if (RtEcatSetActualVelocity(true) != NO_ERROR)     return false;
+    	if (RtEcatSetDI(false) != NO_ERROR)			       return false;
+    	if (RtEcatSetDO(false) != NO_ERROR)			       return false;
+    #endif
+
+    	if (RtEcatSetMode(5) != NO_ERROR)			          return false;// 0:CSP, 1:CSV, 2:CST, 5:changable
+    	if (RtEcatSetDC(true) != NO_ERROR)			          return false;//set to OFF for testing (save time)
+    	if (RtEcatSetMOP(true) != NO_ERROR)			          return false;
+    	if (RtEcatSetVerbosity(2) != NO_ERROR)		          return false;
+    	if (RtEcatSetTimer(1000) != NO_ERROR)		          return false;
+    	if (RtEcatSetExtEncoder(false) != NO_ERROR)	          return false;
+    	if (RtEcatSetEncoderIndex(true) != NO_ERROR)          return false;
+    #endif
+	return true;
+}
+bool DetectSlave()
+{
+	// Detect Ecat Slave, then report to HMI.	
+	int slaveNums[3];
+    #if defined KING_STAR_IO  	
+    	int ret = RtEcatStartMaster(&MyCallBack, slaveNums, sys); // Open MyCallBack 
+    	if (ret != NO_ERROR) { printf("RtEcatStartMaster() error %d \n", ret); return false; }   
+		sys->detectEcatSlave_KingStarIO(slaveNums);
+    #elif defined WIN32_SIMULATE
+    	shm->slaveMotorNum = 24;    
+    #endif
+	
+
+    sys->initIO();					// 偵測IO資訊 並告訴人機
+    EventHandler::Set(sys->evtGotSlaveInfo);// 告訴人機可以設定 mapping
+    waitForHMI();
+
+	if (shm->stopRTX) return false;
+	return true;
+}
+
+bool OpenMyCallback()
+{
+    #if defined WIN32_SIMULATE
+    	Simulator::Start(MyCallBack);
+    #elif defined KING_STAR_IO
+    	// Do nothing. Note: already done if DetectSlave().
+    #endif
+	return true;
+}
+
+void checkEthercatLink()
+{
+	// 檢查 EtherCAT斷線
+    #if defined UNDER_RTSS	
+	    NotificationData ntf;
+	    bool isNtfLeft;
+
+    	RtEcatGetNotification(&ntf, &isNtfLeft);
+    	if (ntf.NotifCode == Error_ETH_LINK_NOT_CONNECTED || ntf.NotifCode == Error_SLAVE_NO_ANSWER)
+    	{
+    		shm->isSlowStop = false;
+    		shm->stopScript = true;
+    		ErrorHandler::Set(eError::LINK_BROKEN, "EtherCAT link broken."); 		
+    	}
+    #endif
+}
+
+// ======================= Main  =========================
+int main(int argc, char *argv[])
+{
+	printf("\n====== ver.2025-0516%s =======\n",MY_CONFIG);
+	sys = new MySystem();
+	
+	Eigen::initParallel(); //Eigen官網建議在 multiThread時使用。but看不出效果。
+
+	if (!OpenShareMemory())    goto Exit3;
+	if (!OpenEthercat())       goto Exit2;
+	if (!DetectSlave())        goto Exit2;
+	if (!sys->initRobots())    goto Exit2;
+	if (!sys->linkToEcat())    goto Exit2;
+ 
+	if (!OpenLogThread())    goto Exit;
+	if (!OpenScriptThread()) goto Exit; 
+	if (!OpenMyCallback())   goto Exit;
+	
+	shm->RTXState = eRTXState::RUNNING;
+
+	Sleep(100); //等待一下，保證Mycallback正常運作。 (至少跑過一輪，經過一次updateData )
+	Debug::writeln(0, "======== EtherCAT Master initialize successed. ==========\n");
+	//Debug::openFile(1,shm->logPath);
+	//Debug::openFile(2, shm->logPath);
+	//Debug::openFile(3, shm->logPath);
+	
+	// 迴圈持續更新從人機來的  1.馬達狀態  2.劇本命令
+	// 目前採所有馬達同開同關。因此只監視robot[0].motors[0]即代表全部	
+	while(!shm->stopRTX)
+	{	
+		checkEthercatLink();		
+		
+		sys->StartServoOnOff();
+
+		Sleep(200);
+	} 
+
+	shm->RTXState = eRTXState::OPEN;
+
+	//無錯誤發生情況下，自動刪除csv 
+	Debug::flushToFile();   
+	Debug::closeFile();
+
+	closeThread();
+Exit:	
+
+Exit2:
+	#if defined KING_STAR_IO
+	RtEcatStopMaster();
+
+	#elif defined WIN32_SIMULATE
+	Simulator::Stop();
+	#endif
+	
+	delete sys;
+Exit3:
+	shm->ecatState = 0;
+	shm->RTXState = eRTXState::CLOSE;
+	printf("========== Rtss Terminated ==============\n");
+	return 0;
+}
+
+// ===================== Threads  =======================
+void scriptStartThread(void* Context)
+{
+	EventHandler::Reset(sys->evtScriptStart);
+
+	while(!shm->stopRTX) {
+
+		EventHandler::WaitFor(sys->evtScriptStart, INFINITE);
+		
+		if(shm->stopRTX) break;
+		Debug::write(0,"\n========= Script Start =========\n");
+
+		//reset syncTable.
+		for(int s = 0; s < MAX_SYNC_NUM; s++){	
+			for(int r = 0; r <= MAX_ROBOT_NUM; r++){
+				if(shm->syncTable[s][r] == eSyncState::READY)
+					shm->syncTable[s][r] = eSyncState::NOT_YET;
+			}
+		}
+
+
+		//reset other stuff
+		for(int r = 0; r < sys->robotNum; r++) {
+			sys->robots[r]->script->prepareStart();
+		}
+
+		//open flag
+		sys->scrRobotNum = sys->robotNum; //temp; should get this value from HMI.
+		shm->stopScript = false;
+		shm->isScriptRunning = true;
+
+		//resume Threads
+		for(int r = 0; r < sys->robotNum; r++) {	
+			ThreadHandler::Resume(hScriptHMIThread[r]);
+			ThreadHandler::Resume(hScriptPlanningThread[r]);
+			ThreadHandler::Resume(hScriptInterpThread[r]);
+		}
+	}
+}
+void scriptHMIThread(void* Context)
+{
+	Script* script = (Script*) Context;
+	int r = script->rId;
+
+	ScriptData* shmScrData = &(shm->scriptData[r]);;
+
+	while(!shm->stopRTX) {	
+
+		//wait for RawQ has space.
+		if(script->rawQueue.isFull()) {
+			Sleep(500);
+			continue;
+		}
+
+		EventHandler::Set(sys->evtScriptNeed[r]);
+		EventHandler::WaitFor(sys->evtScriptSet[r], INFINITE);
+		
+		
+		//check whether HMI is terminated.(true while no cmd is Set; false while HMI press RUN)
+		if(shmScrData->isHMICmdTerminate) {
+			Debug::writeln(0,"\n scriptHMIThread%d is suspended.\n", r);
+			ThreadHandler::Suspend(GetCurrentThread());
+			continue;
+		}
+
+		//put new cmd into RawQueue.
+		script->rawQueue.enqueue(shmScrData->scriptRawCmd);// put in rawQ
+		Sleep(1);
+	}
+	Debug::write (0,"scriptHMIThread[%d] end.\n", r);
+	return;
+}
+void scriptPlanningThread(void* Context)
+{
+	Script* script	= (Script*) Context;
+	Robot* robot	= script->robot;
+	int r = script->rId;
+	int ret;
+
+	ScriptRawCmd	rawCmd;
+	ScriptPathCmd	pathCmd;
+
+	while(!shm->stopRTX){
+
+		if(script->isRawQueueTerminate) {
+			ThreadHandler::Suspend(GetCurrentThread());
+
+			// initialize: at the begging of script.
+			pathCmd.cmdMove.preToolId = shm->jogToolIds[r];
+			pathCmd.cmdMove.nowToolId = shm->jogToolIds[r];
+		}
+
+		//wait for pfQ has space.
+		if(script->ppQueue.getCount() > PPQ_SIZE-2) { 
+			Sleep(100);
+			continue;
+		}
+
+		ret = script->rawQueue.getNodeAtFront(&rawCmd); //只看不拿 
+
+		if(ret < 0) {
+			if(*script->isHMITerminate) 
+				script->isRawQueueTerminate = true; //若 HMI 結束，則宣告rawQ結束
+			Sleep(100);
+			continue;
+		}
+
+		// transfer rawCmd -> pathCmd.
+		if(script->raw2Path(pathCmd, rawCmd) < 0) {
+			Sleep(100); 
+			continue;
+		} 
+
+		script->updateTransferMatrix(pathCmd.cmdMove.endPose); 
+
+		script->ppQueue.enqueue(pathCmd);		//放進ppQ
+		script->rawQueue.dequeue();
+		Sleep(1);
+	}
+	Debug::write(0,"@scriptPlanningThread[%d] end.\n", r);
+	return;
+}
+void scriptInterpThread(void* Context)
+{
+	Script* script = (Script*) Context;
+	static int count = 0;
+
+	int r = script->rId;
+	int ret;
+	Sleep(100); // Thread甦醒後， 稍等一下讓shm->isScriptRunning 變成true. 否則會落入 == false，Thread就懸停了。
+	while(!shm->stopRTX){
+
+		if(shm->isScriptRunning == false) {ThreadHandler::Suspend(GetCurrentThread());Sleep(100);}
+		if(script->intpQueue.isFull()) {Sleep(25); continue; }
+
+		//拿新的pathCmd
+		ret = script->tryToSetNewPath();
+
+		if( count++ ==10 )count = 0;
+		if( ret < 0 && count ==0) Sleep(1); 
+
+		//對目前的pathCmd做插補
+		if( script->interpolate() == eIntpResult::FAIL) {
+			script->slowStop();	//中止劇本
+		}
+	}
+	printf("@scriptInterpThread[%d] end.\n", r);
+	return;
+}
+
+void logThread()
+{
+	while (!shm->stopRTX) {
+		Debug::flushToConsole();  
+
+		//關閉Log.csv跟RTX_.txt
+		Debug::flushToFile(); 	
+		Sleep(20);
+	}
+}
+
+
+// ================== Support Functions ==================
+bool OpenScriptThread()
+{
+	//create Script threads
+	hScriptStartThread = ThreadHandler::Create(0, 300000, (LPTHREAD_START_ROUTINE)scriptStartThread, sys, CREATE_SUSPENDED, NULL);
+	if( hScriptStartThread == NULL){ printf( "RtCreateThread(scriptStartThread) error \n" ); return -1; }
+
+	for(int r = 0; r < sys->robotNum; r++) { 
+		LPDWORD id = 0;
+		hScriptHMIThread[r] = ThreadHandler::Create(0, 300000, (LPTHREAD_START_ROUTINE)scriptHMIThread, sys->robots[r]->script, CREATE_SUSPENDED, id);
+		if( hScriptHMIThread[r] == NULL){ printf( "RtCreateThread(scriptHMIThread[%d]) error \n", r ); return false; }
+		ThreadHandler::SetPriority(hScriptHMIThread[r], 10);
+
+		hScriptPlanningThread[r] = ThreadHandler::Create(0, 300000, (LPTHREAD_START_ROUTINE)scriptPlanningThread, sys->robots[r]->script, CREATE_SUSPENDED, id);
+		if( hScriptPlanningThread[r] == NULL){ printf( "RtCreateThread(scriptPlanningThread[%d]) error \n", r ); return false; }
+		ThreadHandler::SetPriority(hScriptPlanningThread[r], 10);
+
+
+		hScriptInterpThread[r] = ThreadHandler::Create(0, 300000, (LPTHREAD_START_ROUTINE)scriptInterpThread, sys->robots[r]->script, CREATE_SUSPENDED, id);
+		if( hScriptInterpThread[r] == NULL){ printf( "RtCreateThread(scriptInterpThread[%d]) error \n", r ); return false; }
+		ThreadHandler::SetPriority(hScriptInterpThread[r], 10);
+	}
+
+
+	ThreadHandler::SetPriority(hScriptStartThread, 10);
+	ThreadHandler::Resume(hScriptStartThread);
+	
+	return true;
+}
+bool OpenLogThread()
+{
+	//create Log thread
+	hLogThread = ThreadHandler::Create(0, 30000, (LPTHREAD_START_ROUTINE)logThread, NULL, CREATE_SUSPENDED, NULL);
+	if (hLogThread == NULL) { 
+		printf("RtCreateThread(LogThread) error \n"); 
+		return false; 
+	}
+
+	ThreadHandler::SetPriority(hLogThread, 10);
+	ThreadHandler::Resume(hLogThread);
+
+	return true;
+}
+void closeThread()
+{
+	EventHandler::Set(sys->evtScriptStart);
+
+	// 叫醒Thread讓它們自然結束
+	for(int r = 0; r<sys->robotNum; r++) {
+		ThreadHandler::Resume(hScriptHMIThread[r]);
+		ThreadHandler::Resume(hScriptPlanningThread[r]);
+		ThreadHandler::Resume(hScriptInterpThread[r]);
+	}
+
+	// 等待確認他們結束
+	if(EventHandler::WaitFor(hScriptStartThread, 3000) == WAIT_TIMEOUT)
+			printf("waitTimeOut! [hScriptStartThread]\n");
+
+	for(int r = 0; r<sys->robotNum; r++) {
+
+		if(EventHandler::WaitFor(hScriptHMIThread[r], 3000) == WAIT_TIMEOUT)
+			printf("waitTimeOut! [hScriptHMIThread%d]\n", r);
+
+		if(EventHandler::WaitFor(hScriptPlanningThread[r], 3000) == WAIT_TIMEOUT)
+			printf("waitTimeOut! [hScriptPlanningThread%d]\n", r);
+		
+		if(EventHandler::WaitFor(hScriptInterpThread[r], 3000) == WAIT_TIMEOUT)
+			printf("waitTimeOut! [hScriptInterpThread%d]\n", r);
+	}
+
+	// 關閉Handle
+	EventHandler::Close(hScriptStartThread);
+	EventHandler::Close(hLogThread);
+	EventHandler::Close(sys->evtScriptStart);
+
+	for(int r = 0; r<sys->robotNum; r++) {
+		EventHandler::Close(hScriptHMIThread[r]);
+		EventHandler::Close(hScriptPlanningThread[r]);
+		EventHandler::Close(hScriptInterpThread[r]);
+
+		EventHandler::Close(sys->evtScriptSet[r]);
+		EventHandler::Close(sys->evtScriptNeed[r]);		
+	}
+	
+	return;
+}

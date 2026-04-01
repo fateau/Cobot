@@ -1,0 +1,113 @@
+﻿#pragma once
+
+#include "Def.h"
+
+struct BaseData
+{
+	double Pose[6]; //XYZABC
+};
+struct ToolData
+{
+	double Pose[6]; //XYZABC
+};
+struct IOModuleData
+{
+	int		inpByteNum;
+	int		outByteNum;
+	BYTE	inpBytes[MAX_INP_BYTE_PER_IO];		// Ecat偵測到的值
+	BYTE	outBytes[MAX_OUT_BYTE_PER_IO];		// Ecat偵測到的值
+	BYTE	outBytesCmd[MAX_OUT_BYTE_PER_IO];	// 從人機來下給Ecat的指令
+};
+struct MotorData
+{
+	BOOL	isNeedServoOn;
+	BOOL	isNeedServoOff;
+	BOOL	isServoOn;
+};
+struct RobotSpec
+{
+	double	reductionRatio	[MAX_MOTOR_PER_ROBOT];	// 減速比 = gearRatio * 皮帶比 * 導程
+	double  masteringData	[MAX_MOTOR_PER_ROBOT];
+	DHtable DH;
+	double  maxAxisVel		[MAX_MOTOR_PER_ROBOT];
+	double  maxTCPVel;								// XYZ(mm) 和 R(deg) 共用一個最大速度
+};
+struct RobotData
+{
+	RobotSpec spec;
+	MotorData motors	[MAX_MOTOR_PER_ROBOT];	
+
+	double	axisDegNow	[MAX_MOTOR_PER_ROBOT];
+	double	velocity	[MAX_MOTOR_PER_ROBOT];
+	short	torque		[MAX_MOTOR_PER_ROBOT];
+	double	poseAtWorld	[MAX_REDUNDANCY];		//在世界座標下的姿態
+	double	poseAtRoot	[MAX_REDUNDANCY];		//在RootBase下的姿態
+	double	poseAtBase	[MAX_REDUNDANCY];		//在目前Base下的姿態
+};
+struct ScriptData
+{
+	bool			isHMICmdTerminate;
+	int				nowLineId; 
+	int				nowFuncId;
+	ScriptRawCmd	scriptRawCmd;
+};
+struct HomingData  
+{
+	int				rId;
+	int				mId;
+};
+struct SHMData
+{
+	eError::e		errorCode;
+	char			errorMsg[ ERROR_MSG_LEN];
+
+	eRTXState::e	RTXState;
+	eRTXMode::e		RTXMode;
+	eProject::e		project;
+	int				NIC;		// Network Card #
+	int				ecatState;
+	int				masterId;
+	int				slaveMotorNum;
+	int				slaveIONum;
+	BOOL			stopRTX;
+	bool			isApplyToRealMotor;
+	bool			isNeedResetDegree;	// for WIN32_SIMULATE
+
+	RobotData		robots[MAX_ROBOT_NUM];
+	BaseData		bases[MAX_BASE_NUM];
+	ToolData		tools[MAX_TOOL_NUM];
+		
+	eCmdSource::e	cmdSource;	//Jog or Script
+	eCmdFormat::e	cmdFormat;	//Axis,Pose, or Point
+
+	// ===== Jog ======
+	JogCmd			jogCmd;
+	int				jogBaseIds[MAX_ROBOT_NUM];
+	int				jogToolIds[MAX_ROBOT_NUM];
+	eFrame::e		jogFrame;
+
+	// ===== Script ====
+	ScriptData		scriptData[MAX_ROBOT_NUM];
+	bool			isScriptRunning;
+	bool			isSlowStop;
+	bool			stopScript;
+	double			vGain;
+	eSyncState::e	syncTable[MAX_SYNC_NUM][MAX_ROBOT_NUM + 1]; // last Column for "ALL"
+
+	// ===== IO =======
+	IOModuleData		ioModules		[MAX_IO_NUM];
+	
+	// ====== Robot Declaration ========
+	RobotDeclareData	robotDeclareTable[MAX_ROBOT_NUM];
+	EcatMappingData		ecatMappingTable[MAX_MOTOR_NUM];
+
+	// == Scurve ===== 
+	int 		Jerk;	 
+	int         onScurve;
+
+	// == Record ===
+	char logPath[256];
+
+	//== Homing Mode===
+	HomingData			homingData;
+};

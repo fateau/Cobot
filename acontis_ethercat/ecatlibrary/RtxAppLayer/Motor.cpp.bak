@@ -1,0 +1,321 @@
+﻿#include "Motor.h"
+#include <stdio.h>
+#include "SHM.h"
+#include "ErrorHandler.h"
+#include "Debug.h"
+
+extern SHMData* shm;
+Motor::Motor(int rId,int mId)
+{
+	this->rId           = rId;
+	this->mId			= mId;
+
+	encoderResolution	= 0;
+	angleToEncoderRatio = 0;
+	encoderToAngleRatio = 0;
+
+	isLinkedToEcat		= false;
+	hasPrintError		= false;
+	_statusWord			= 0;
+
+	#if defined KING_STAR_IO
+	status		= eMotorStatus::NOT_READY;
+	command		= eMotorCommand::NONE;
+	#endif
+}
+
+void Motor::setGearRatio(double gearRatio)
+{
+	this->gearRatio = gearRatio;
+}
+double Motor::getGearRatio()
+{
+	return this->gearRatio;
+}
+void Motor::setEncoderResolution(U32_T vendorID)
+{
+	this->vendorID = vendorID;
+	
+	switch(vendorID){		
+		case SYNAPTICON:
+			encoderResolution = 524288;
+		default:
+			encoderResolution = 524288;	//Modify by yunyu 20250509
+	}
+
+	angleToEncoderRatio = gearRatio *encoderResolution / 360; 
+	encoderToAngleRatio = 360 / gearRatio / encoderResolution;
+
+	return;
+}
+
+
+int  Motor::updateData()
+{	
+	if(!isLinkedToEcat) return 2;
+	#if defined KING_STAR_IO
+	unsigned long error = 0;
+
+	//detect if Driver has error.-> block myCallback.  
+	ReadStatusWord(kingAxis, &_statusWord);
+
+	if( status == eMotorStatus::OPERATION_ENABLED)  //Status : Brake OFF 
+	{
+	  if( (_statusWord & 0x4F) == 0x00 || (_statusWord & 0x4F) == 0x40 || (_statusWord & 0x4F) == 0x60 )
+	  {
+	  	  status	= eMotorStatus::NOT_READY;
+	      return -1; 
+	  }
+	}
+
+	//錯誤碼讀取
+	if (vendorID == SYNAPTICON) ReadCustomInput1(kingAxis, &error);
+
+	if (_statusWord & 0x0008 || error != 0) { //bit 3 should be 0
+		if (!hasPrintError) {
+			hasPrintError = true;
+			ErrorHandler::Set(eError::DRIVER_ERROR,
+				"r[%d], axis[%d]. statusWord=%x,error=%x\n",
+				rId + 1,
+				mId + 1,
+				_statusWord,
+				error);
+		}
+		return -1;
+	}
+	hasPrintError = false;
+
+	unsigned long acPos;
+	unsigned long acVel;
+
+	#ifdef _AMD64_
+		unsigned short acTorq;
+	#endif
+	ReadActualPosition(kingAxis, &acPos);
+	ReadActualVelocity(kingAxis, &acVel);
+	ReadActualTorque(kingAxis, &acTorq);
+	_actualPosition = (int)acPos;
+	_actualVelocity = (int)acVel;
+	_actualTorque	= (I16_T)acTorq;
+	#endif	
+
+	_actualDegVel	= _actualVelocity * encoderToAngleRatio;
+	_actualDeg		= _actualPosition * encoderToAngleRatio;
+
+
+	return 1;
+}
+void Motor::servoOn()
+{
+	if(!isLinkedToEcat) return;
+
+	#if defined KING_STAR_IO	
+	//let TargetPos = ActualPos, to prevent suddenly jump at ServoOn.
+	unsigned long acPos;
+	ReadActualPosition(kingAxis, &acPos);
+	WriteTargetPosition(kingAxis, acPos);
+	_actualPosition = (int)acPos;
+	command = eMotorCommand::SERVO_ON;
+	#endif
+}
+void Motor::servoOff()
+{
+	if(!isLinkedToEcat) return;
+
+	#if defined KING_STAR_IO
+	command = eMotorCommand::SERVO_OFF;
+	#endif
+}
+
+bool Motor::isServoOn() {
+
+	#if defined KING_STAR_IO	
+	if( status == eMotorStatus::OPERATION_ENABLED)
+		return true;
+	else
+		return false;
+	#elif defined WIN32_SIMULATE
+		return true;
+	#endif
+	
+}
+
+void Motor::StartServoOnOff() //伺服開關
+{
+	MotorData* motorData = &(shm->robots[rId].motors[mId]);
+
+	if (motorData->isNeedServoOn) {
+		motorData->isNeedServoOn = false;
+		servoOn();
+	}
+	else if (motorData->isNeedServoOff) {
+		motorData->isNeedServoOff = false;
+		servoOff();
+	}
+}
+
+void Motor::setMode(eRTXMode::e mode)
+{
+	_mode = mode;
+	if(mode==3) mode=eRTXMode::CSV; 
+	#if defined KING_STAR_IO
+	WriteModeOP(kingAxis, mode); // Note: 需在初始化時將MOP設為true
+	#endif
+}
+void Motor::setControlWord(U16_T controlWord)
+{
+	if(!isLinkedToEcat) return;
+
+	#if defined KING_STAR_IO
+	WriteControlWord(kingAxis, controlWord);
+	#endif
+}
+void Motor::setTargetPosition( int targetPosition)
+{
+	if(!isServoOn()) return;
+	if(!isLinkedToEcat) return;
+
+	#if defined KING_STAR_IO
+	WriteTargetPosition(kingAxis, targetPosition);
+	#endif
+}
+
+int ToInt(double d)
+{	
+	if(d > INT_MAX) 			
+		d = d - INT_MAX - INT_MAX; //note: can't write as  d -= 2*INT_MAX. 
+
+	else if(d < INT_MIN) 
+		d = d + INT_MAX + INT_MAX;
+
+	int i = (int)d;
+	return i;
+}
+void Motor::setTargetDeg(double targetDeg)// angle 為傘齒補償後
+{
+	int i = ToInt(targetDeg * angleToEncoderRatio);
+	setTargetPosition(i);
+}
+void Motor::setTargetTorque(int targetTorque)
+{
+	#if defined KING_STAR_IO
+
+		#ifdef _AMD64_
+			WriteTargetTorque(kingAxis, (unsigned short)targetTorque);;
+		#endif
+
+	#endif
+}
+void Motor::setTargetEncVel(int targetEncVel)
+{
+	#if defined KING_STAR_IO
+
+	// Plan A: 0x60FF with CSV Mode
+	WriteTargetVelocity(kingAxis, targetEncVel); // unit: encoders/s
+	#endif
+}
+void Motor::setTargetDegVel(double targetDegVel) // unit:deg/s
+{
+	int i;
+	i	= targetDegVel * angleToEncoderRatio; //unit: encoder per sec.
+
+	setTargetEncVel(i); 
+}
+
+
+U16_T Motor::getStatusWord()
+{
+	return _statusWord;
+}
+int Motor::getActualPosition()
+{
+	return _actualPosition;
+}
+double Motor::getActualDeg()
+{	
+	return _actualDeg;
+}
+double Motor::getActualDegVel()
+{	
+	return _actualDegVel;
+}
+U16_T Motor::getActualTorque()
+{	
+	return _actualTorque;
+}
+unsigned long Motor::getErrorCode()
+{
+
+	#if defined KING_STAR_IO
+	unsigned long errorCode = 0;
+	
+		#ifdef _AMD64_
+			ReadDWord((unsigned char*)kingAxis->pPdoOut, 0x603F, &errorCode);
+		#else
+			ReadDWord((unsigned long*)kingAxis->pPdoOut, 0x603F, &errorCode);
+		#endif
+	
+	return errorCode;
+	#elif defined WIN32_SIMULATE
+	return 0;
+	#endif
+
+
+	
+}
+#if defined KING_STAR_IO
+void Motor::processStatus()
+{	 
+	if(command == eMotorCommand::SERVO_ON) {
+		ReadStatusWord(kingAxis, &_statusWord);
+		switch (status) {
+			case eMotorStatus::NOT_READY:
+				if( (_statusWord & 0x4F) == 0x00 ||  
+					(_statusWord & 0x4F) == 0x40 ||  
+					(_statusWord & 0x4F) == 0x60 )
+				{
+					status = eMotorStatus::SWITCH_ON_DISABLED;
+				} 
+				else if (_statusWord & 0x08) {
+					status = eMotorStatus::FAULT;
+					setControlWord(0x80);			//fault reset
+				} 
+				break;
+			case eMotorStatus::SWITCH_ON_DISABLED:    
+				if( (_statusWord & 0x4F) == 0x40 ||
+					(_statusWord & 0x4F) == 0x60 )
+				{
+					setControlWord(0x06);			//shut down
+					status = eMotorStatus::READY_TO_SWITCH_ON;
+				} 
+				break;
+			case eMotorStatus::READY_TO_SWITCH_ON:   
+				if((_statusWord & 0x6F) == 0x21) {
+					setControlWord(0x07);			//switch on
+					status = eMotorStatus::SWITCHED_ON;
+				} break;
+			case eMotorStatus::SWITCHED_ON:
+				if((_statusWord & 0x6F) == 0x23) {	
+					setControlWord(0x0F);			//enable operation
+					status = eMotorStatus::OPERATION_ENABLED;
+					command = eMotorCommand::NONE;	//重置命令
+				} break;
+			case eMotorStatus::FAULT:               
+					setControlWord(0x80);			//fault reset
+					status = eMotorStatus::NOT_READY;
+				break;
+		}
+	}
+	else if(command == eMotorCommand::SERVO_OFF){
+		setControlWord(0x00);						//disable voltage.
+		command		= eMotorCommand::NONE;			//重置命令
+		status		= eMotorStatus::NOT_READY;
+	}
+	
+	return ;
+}
+
+#endif
+
+
+

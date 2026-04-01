@@ -1,0 +1,309 @@
+﻿#include "Robot.h"
+
+#include "MySystem.h"
+#include "Script.h"
+#include "Jog.h"
+#include "Motor.h"
+#include "HelpFunctions.h"
+#include "Debug.h" 
+#include "ErrorHandler.h"
+#include "Kinematics.h"
+
+#include "SHM.h"
+
+extern SHMData* shm;
+
+
+/** @brief Robot建構式
+* 
+* 1.初始化參數
+* 2.建立Jog, script 等物件
+* 3.建立馬達物件陣列
+* 4.建立運動學物件
+*
+* @param rId 此Robot的編號
+*		 motorNum 馬達數量
+*		 robotType Robot類型。
+* @return 無
+*/
+Robot::Robot(MySystem* sys, int rId, RobotDeclareData* data)
+{
+	int m;
+	isNeedMove		= false;
+	isAtSyncId		= -1;
+	kinMC			= NULL;
+	kinIntp			= NULL;
+	kinPath			= NULL;
+	this->sys		= sys;
+	this->rId		= rId;
+	this->robotType	= data->robotType;
+	this->motorNum	= data->motorNum;
+	this->gestureNum= data->gestureNum;
+
+	switch(robotType) {
+		case eRobotType::Axis6:
+			kinMC	= new Kin_6Axis(rId); 
+			kinIntp = new Kin_6Axis(rId);
+			kinPath = new Kin_6Axis(rId);
+			break;
+		case eRobotType::Ext: //add by yunyu 20250502
+			kinMC	= new Kin_Ext(rId, motorNum);
+			kinIntp = new Kin_Ext(rId, motorNum);
+			kinPath = new Kin_Ext(rId, motorNum);
+			break;
+        //add by yunyu 20250401
+		case eRobotType::Cobot:
+			kinMC	= new Kin_Cobot(rId);
+			kinIntp = new Kin_Cobot(rId);
+			kinPath = new Kin_Cobot(rId);
+			break;
+	}
+
+	jog				= new Jog(this);
+	script			= new Script(this);	
+	RobotSpec* spec = &(shm->robots[rId].spec);
+	masteringData	= spec->masteringData;
+	
+	for(m = 0; m<motorNum; m++) {
+		motors[m]			= new Motor(rId,m);
+		motors[m]->setGearRatio(spec->reductionRatio[m]);
+		axisDegNow[m]		= spec->DH.thetasInit[m];
+		axisDegCmd[m]		= spec->DH.thetasInit[m];
+		axisDegCmdPrev[m]	= axisDegCmd[m];
+		axisTorqNow[m]		= 0;
+	}
+
+		// set refRoot;
+	for(int i = 0; i < 6; i++)	 this->refRoot[i] = data->refRoot[i];
+
+	transferPose2T(script->ref2Root_T, this->refRoot);
+	transferPose2T(ref2Root_T, refRoot); 
+	script->world2Ref_T = 0;
+	copyHT(script->world2Root_T, script->ref2Root_T);	// set world T root as constant.
+	copyHT(world2Root_T, ref2Root_T);
+	inverseHT( root2World_T, world2Root_T);
+
+	// init world2Base
+	this->nowBaseId = 0;
+	SetArrayValue(this->nowBase, 0.0, 6);
+	transferPose2T(world2Base_T, shm->bases[0].Pose);
+	inverseHT(base2World_T, world2Base_T);
+
+	printf("create Robot obj: Type = %d, motorNum = %d\n", robotType, motorNum);
+}
+Robot::~Robot(void)
+{
+	for(int i = 0; i<motorNum; i++) 
+		delete motors[i];
+	
+	if(kinMC	!= NULL) delete kinMC;
+	if(kinIntp	!= NULL) delete kinIntp;
+	if(kinPath	!= NULL) delete kinPath;
+	if(jog		!= NULL) delete jog;
+	if(script	!= NULL) delete script;
+}
+
+int Robot::updateData()
+{
+	int m,i;
+	
+	int baseId = shm->jogBaseIds[rId];
+	if(!IsArrayEqual(nowBase, shm->bases[baseId].Pose, 6)) {
+		nowBaseId = baseId;
+		CopyArray(nowBase, shm->bases[baseId].Pose, 6);
+
+		transferPose2T(world2Base_T, shm->bases[baseId].Pose);
+		inverseHT(base2World_T, world2Base_T);
+	}
+
+#if defined UNDER_RTSS
+	
+	if(shm->isApplyToRealMotor == true) {	//從馬達拉值。
+
+		double rawDeg[MAX_MOTOR_PER_ROBOT];
+
+		//update Motors
+		bool allPass = true;
+		for(m = 0; m < motorNum; m++) {
+			if(motors[m]->updateData() < 0) allPass = false;
+		}
+		if(!allPass) return -1;
+
+		for(m = 0; m < motorNum; m++) {
+			rawDeg[m]		= motors[m]->getActualDeg();
+			axisVelNow[m]	= motors[m]->getActualDegVel();
+			axisTorqNow[m]= motors[m]->getActualTorque();
+		}
+
+		//歸零補償
+		masteringDataAdd(axisDegNow, rawDeg);
+	}
+	else {
+		setSimulationData();
+	}
+#else
+	setSimulationData();
+	
+#endif
+
+	//計算Pose (poseAtRoot)
+	kinMC->FK(poseAtRoot, axisDegNow, shm->jogToolIds[rId]); 
+
+	
+	// 人機顯示的 pose (poseAtWorld)
+	double world2Pose_T[4][4];
+	double  root2Pose_T[4][4];
+	
+	// 將 poseAtRoot 資料複製到 poseAtBase & poseAtWorld 裡 ,
+	// 是為了讓 poseAtBase & poseAtWorld 帶有 redundancy (RX,RY,...,RE) 的資訊 ,
+	// 因為 transferT2Pose 只能計算 XYZABC 
+	for(i = 6; i < gestureNum; i++)
+	{
+		poseAtBase [i] = poseAtRoot[i];
+		poseAtWorld[i] = poseAtRoot[i];
+	}
+
+	transferPose2T(root2Pose_T, poseAtRoot);
+	multiplyMatrix_4x4(world2Pose_T, world2Root_T, root2Pose_T);
+	transferT2Pose(poseAtWorld, world2Pose_T);
+
+
+	// 人機顯示的 pose (poseAtBase)
+	double base2Pose_T[4][4];
+	multiplyMatrix_4x4(base2Pose_T, base2World_T, world2Pose_T);
+	transferT2Pose(poseAtBase, base2Pose_T);
+
+	//將值寫到 shm. //設定下次要送出的預設值
+	RobotData* rData = &(shm->robots[rId]);
+
+	for(m = 0; m< motorNum; m++) {
+		rData->axisDegNow[m]	= axisDegNow[m];
+		rData->velocity[m]		= axisVelNow[m]; 
+		rData->torque[m]		= axisTorqNow[m];
+
+		axisDegCmd[m] = axisDegNow[m];
+	}
+	
+	for(i = 0; i< 7; i++) {
+		rData->poseAtRoot[i] = poseAtRoot[i];
+		rData->poseAtBase[i] = poseAtBase[i];
+		rData->poseAtWorld[i] = poseAtWorld[i];
+		nextPose[i] = poseAtRoot[i];
+	}
+
+	return 1;
+}
+
+void Robot::resetCmd()
+{
+	// 當 isAxisJump 跳點檢測觸發時。應令命令 = 實際值。
+	CopyArray(axisDegCmd, axisDegNow, motorNum);
+}
+void Robot::resetCmdPrev()
+{
+	// 用在 isAxisJump 跳點檢測中。沒動作時，應令此值 = 實際值。
+	CopyArray(axisDegCmdPrev, axisDegNow, motorNum);
+}
+
+void Robot::writeNextAxisForAllMotors()
+{
+	if(isNeedMove == false)  return;	// 此robot不需要移動	
+			
+	if (isAxisJump()){			// 若有跳點，不送命令到馬達, 且急停
+		resetCmd();
+		return;
+	}	
+
+#if defined UNDER_RTSS
+	if(shm->isApplyToRealMotor == false) 
+		return;	
+		
+	double rawDeg[MAX_MOTOR_PER_ROBOT];
+
+	//逆歸零補償
+	masteringDataRemove(rawDeg, axisDegCmd);
+
+	//寫入馬達 (axis)
+	for(int m = 0; m < motorNum; m++) 
+		motors[m]->setTargetDeg(rawDeg[m]);	
+
+
+#endif
+}
+void Robot::writeNextTorqForAllMotors()
+{
+	//寫入馬達 (axis)
+	for(int m = 0; m < motorNum; m++) 
+		motors[m]->setTargetTorque(nextTorques[m]);
+	return;
+}
+
+void Robot::StartServoOnOff()
+{
+	for (int m = 0; m < motorNum; m++)
+		motors[m]->StartServoOnOff();
+}
+void Robot::isServoOn()
+{
+	for(int m = 0; m < motorNum; m++) 
+		shm->robots[rId].motors[m].isServoOn = motors[m]->isServoOn();
+}
+bool Robot::isReachAngleLimit_next()
+{
+	for(int m = 0; m< motorNum; m++) {
+		if(kinMC->isReachAngleLimit(axisDegCmd[m], m)){
+			// note: do not print here. will print a lot and watchdog.
+			return true;
+		}
+	}
+	
+	return false;
+}
+bool Robot::isAxisJump()
+{
+	for(int i = 0; i<motorNum; i++) {
+
+		// 1000度/s 視為跳點。 若無跳點則繼續；若跳點則回傳false;
+		if( abs(axisVelNow[i]) < 1000 ) continue; 
+
+		ScriptData* shmScrData = &(shm->scriptData[rId]);
+		shm->stopScript = true;
+		ErrorHandler::Set(eError::AXIS_JUMP, 
+			"Robot/isAxisJump: r[%d], axis[%d], func[%d], line[%d],  prevDeg[%lf], nextDeg[%lf],axisVelNow[%lf,%lf]", 
+			rId+1, 
+			i+1, 
+			shmScrData->nowFuncId+1,
+			shmScrData->nowLineId, 
+			axisDegCmdPrev[i], 
+			axisDegCmd[i],axisVelNow[0],axisVelNow[2]);
+		return true;
+	}
+
+	return false;
+}
+
+void Robot::masteringDataAdd(double* outCompDeg, double* inRawDeg)
+{
+	for(int i = 0; i < motorNum; i++)
+		outCompDeg[i] = inRawDeg[i] + masteringData[i];
+	return;
+}
+void Robot::masteringDataRemove(double* outRawDeg, double* inCompDeg)
+{
+	for(int i = 0; i < motorNum; i++)
+		outRawDeg[i] = inCompDeg[i] - masteringData[i];
+	return;
+}
+void Robot::setSimulationData()
+{
+	//不從馬達拉值。直接將上一毫秒的指令當成現在的值
+	CopyArray(axisDegNow, axisDegCmd, motorNum);
+
+	//將角度相減得到速度
+	for(int m = 0; m< motorNum; m++) {
+		axisVelNow[m] = (axisDegCmd[m] - axisDegCmdPrev[m]) * SAMPLING_T_INV ;
+		axisAccNow[m] = (axisVelNow[m] - axisVelPrev[m]) * SAMPLING_T_INV ;
+		axisDegCmdPrev[m] = axisDegCmd[m];
+		axisVelPrev[m] = axisVelNow[m];
+	}
+}
