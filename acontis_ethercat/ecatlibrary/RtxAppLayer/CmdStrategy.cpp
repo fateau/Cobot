@@ -10,9 +10,9 @@
 #include "PathStartSyncer.h" //see if can remove.
 #include "Kinematics.h"
 
-#include "MathTooL.h"
+#include "MathTool.h"
 #include "Debug.h"
-#include "SHM.h"
+#include "Shm.h"
 #include "ErrorHandler.h" 
 
 extern SHMData* shm;

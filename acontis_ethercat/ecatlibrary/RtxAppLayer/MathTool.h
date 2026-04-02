@@ -1,6 +1,6 @@
 ﻿#pragma once
 
-#include "Eigen\Dense" //Matrix Library API found online. must to declare first, otherwise compile error.
+#include "Eigen/Dense" //Matrix Library API found online. must to declare first, otherwise compile error.
 #include <math.h>
 
 #define PI		 3.141592653589793238462643383279	/* π */

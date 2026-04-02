@@ -1,21 +1,14 @@
 #pragma once
 
-#include <stdio.h>
-#include <Windows.h>
+/* Simulator is not used in acontis/Linux build.
+   The cyclic task is handled by EcMasterJobTask in AppLayer.cpp. */
+
+#include <cstdio>
 #include "Def.h"
 
-#ifdef WIN32_SIMULATE
 class Simulator
 {
-
 public:
-	static void Start(void (CALLBACK *func)(UINT, UINT, DWORD, DWORD, DWORD));
-	static void Stop();
-
-private:
-	static TIMECAPS tc;
-	static MMRESULT timerID;
-	
+    static void Start() {}
+    static void Stop()  {}
 };
-
-#endif

@@ -1,7 +1,7 @@
 ﻿#pragma once
 #include <iostream>
-#include <windows.h>
-#include <process.h>
+#include <pthread.h>
+#include <stdexcept>
 using namespace std;
 
 template <class T>
@@ -33,7 +33,7 @@ private:
 	int r;		//rear		//r  為queue的最後一個 (最新enqueue者)
 	T*	queue;
 	int _maxSize;
-	CRITICAL_SECTION m_cs;
+	pthread_mutex_t m_cs;
 };
 
 
@@ -46,7 +46,7 @@ MyQueue<T>::MyQueue(int maxSize)
 	f			= 0;
 	r			= 0;
 	queue		= new T[_maxSize];
-	InitializeCriticalSection(&m_cs);
+	pthread_mutex_init(&m_cs, nullptr);
 }
 
 template <class T>
@@ -60,10 +60,10 @@ int MyQueue<T>::enqueue(T node) //todo: change to T* node?
 {
     if(isFull()) return -1; 
 
-	EnterCriticalSection(&m_cs);
+	pthread_mutex_lock(&m_cs);
 	r = (r+1) % _maxSize; 
 	queue[r] = node; 
-	LeaveCriticalSection(&m_cs);
+	pthread_mutex_unlock(&m_cs);
 	return 1;
 }
 
@@ -72,10 +72,10 @@ int MyQueue<T>::dequeue(T* node)
 {
     if(isEmpty()) return -1;
 
-	EnterCriticalSection(&m_cs);
+	pthread_mutex_lock(&m_cs);
 	f = (f+1) % _maxSize;
 	*node = queue[f];
-	LeaveCriticalSection(&m_cs);
+	pthread_mutex_unlock(&m_cs);
     return 1;
 }
 
@@ -84,9 +84,9 @@ int MyQueue<T>::dequeue()
 {
     if(isEmpty()) return -1;
 
-	EnterCriticalSection(&m_cs);
+	pthread_mutex_lock(&m_cs);
     f = (f+1) % _maxSize; 
-	LeaveCriticalSection(&m_cs);
+	pthread_mutex_unlock(&m_cs);
     return 1;
 }
 
@@ -95,9 +95,9 @@ int MyQueue<T>::getNodeAtFront(T* node)
 {
 	if(isEmpty()) {node = NULL; return -1;}
 
-	EnterCriticalSection(&m_cs);
+	pthread_mutex_lock(&m_cs);
 	*node = queue[(f+1) % _maxSize]; //didn't move f.
-	LeaveCriticalSection(&m_cs);
+	pthread_mutex_unlock(&m_cs);
     return 1;
 }
 
@@ -108,9 +108,9 @@ int MyQueue<T>::getNodeAtRear(T* node)
 	if(_maxSize <=0) 
 		return -1;
 
-	EnterCriticalSection(&m_cs);
+	pthread_mutex_lock(&m_cs);
 	*node = queue[r];
-	LeaveCriticalSection(&m_cs);
+	pthread_mutex_unlock(&m_cs);
     return 1;
 }
 

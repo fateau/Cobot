@@ -63,7 +63,7 @@ public:
 	double	ref2Root_T[4][4];
 
 	//-------- function --------
-	Robot::Robot(MySystem* sys, int rId, RobotDeclareData* data);
+	Robot(MySystem* sys, int rId, RobotDeclareData* data);
 	~Robot(void);
 
 	//馬達控制

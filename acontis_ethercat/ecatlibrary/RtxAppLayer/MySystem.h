@@ -1,7 +1,6 @@
-﻿#pragma once
+#pragma once
 
 #include "Def.h"
-
 
 /** @brief 系統類別。包含Robot, IOGroup等重要物件；負責Ecat連線及配置。
 *
@@ -46,13 +45,16 @@ public:
 	int		slaveMotorNum;
 	int		slaveIONum;
 
-	#if defined KING_STAR_IO
-	HANDLE	hDatamem;
-	void*	ecatDataMemory;
-	#endif
+	// acontis process image pointers
+	EC_T_BYTE*  pbyPDIn;
+	EC_T_BYTE*  pbyPDOut;
+
+	// acontis slave info arrays
+	AXIS_ECAT	axisEcat[MAX_MOTOR_NUM];
+	IO_ECAT		ioEcat[MAX_IO_NUM];
 
 	//--------- function ----------//	
-	int detectEcatSlave_KingStarIO(int slaveNums[3]);
+	int detectEcatSlave(int slaveNums[3]);
 	int initIO();
 	int initRobots();
 	int linkToEcat();
@@ -71,4 +73,3 @@ private:
 	// Base related.
 	int		currentBaseId;
 };
-

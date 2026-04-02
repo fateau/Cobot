@@ -55,7 +55,7 @@ double HG6Cobot::AngleLimitTorque(double angle_Deg, double angle_Vel, const int 
 void HG6Cobot::calTorq_HandGuide(int* out_torq)	//ノも┰		( + 场だ集揽徊)
 {
     double m[6], f[6], g[6];
-    double* aidRatio = shm->HGParams[robot->rId].aidRatio;
+    double* aidRatio = shm->hgParams[robot->rId].aidRatio;
     double* axisVelNow = robot->axisVelNow;
     double* axisDegNow = robot->axisDegNow;
 
@@ -133,9 +133,9 @@ void HG6Cobot::calGesture(double g[], double m[]) //ミ诀篶把计
 
 void HG6Cobot::calTorq_G(double g[]) //  g
 {
-    double* g_shift = shm->HGParams[robot->rId].g_shift;
-    double* g_ratio = shm->HGParams[robot->rId].g_ratio;
-    double* ratedTorq = shm->HGParams[robot->rId].ratedTorq;
+    double* g_shift = shm->hgParams[robot->rId].g_shift;
+    double* g_ratio = shm->hgParams[robot->rId].g_ratio;
+    double* ratedTorq = shm->hgParams[robot->rId].ratedTorq;
     double getGearRatio[6] = { 81, 81, 81, 121, 121, 121 }; //PMC Modified 11501 //0115
 
     for (int i = 0; i < nAxis; i++)
@@ -144,8 +144,8 @@ void HG6Cobot::calTorq_G(double g[]) //  g
 
 void HG6Cobot::calTorq_F_HG(double f[]) // 集揽 f
 {
-    double* KV = shm->HGParams[robot->rId].KV;
-    double* KV0 = shm->HGParams[robot->rId].KV0;
+    double* KV = shm->hgParams[robot->rId].KV;
+    double* KV0 = shm->hgParams[robot->rId].KV0;
     double* axisVelNow = robot->axisVelNow;
 
     for (int i = 0; i < nAxis; i++) {
@@ -173,8 +173,8 @@ void HG6Cobot::calTorq_F_HG(double f[]) // 集揽 f
 
 void HG6Cobot::calTorq_F(double f[]) // 集揽 f
 {
-    double* KV = shm->HGParams[robot->rId].KV;
-    double* KV0 = shm->HGParams[robot->rId].KV0;
+    double* KV = shm->hgParams[robot->rId].KV;
+    double* KV0 = shm->hgParams[robot->rId].KV0;
     double* axisVelNow = robot->axisVelNow;
 
     for (int i = 0; i < nAxis; i++) {
@@ -187,8 +187,8 @@ void HG6Cobot::calTorq_F(double f[]) // 集揽 f
 
 void HG6Cobot::calTorq_M(double m[]) // 篋┦m //PMC Modified 11411 //1118
 {
-    double* KA = shm->HGParams[robot->rId].KA;
-    double* KA0 = shm->HGParams[robot->rId].KA0;
+    double* KA = shm->hgParams[robot->rId].KA;
+    double* KA0 = shm->hgParams[robot->rId].KA0;
     double* axisAccNow = robot->axisAccNow;
     doInertia(m_Inertia);
     for (int i = 0; i < nAxis; i++) {
@@ -201,7 +201,7 @@ void HG6Cobot::calTorq_M(double m[]) // 篋┦m //PMC Modified 11411 //1118
 
 void HG6Cobot::calTorq_C(double c[]) // んc //PMC Modified 11411 //1118
 {
-    double* KC = shm->HGParams[robot->rId].KC;
+    double* KC = shm->hgParams[robot->rId].KC;
     double* axisVelNow = robot->axisVelNow;
 
     for (int i = 0; i < nAxis; i++) {
@@ -217,10 +217,10 @@ void HG6Cobot::reset()
     double pi = atan(1.0) * 4;
     double toRad = pi / 180.;
     double toDeg = 180. / pi;
-    double payload = shm->HGParams[robot->rId].payload;
-    double centerX = shm->HGParams[robot->rId].centerX;//PMC Modified 11501 //0127
-    double centerY = shm->HGParams[robot->rId].centerY;
-    double centerZ = shm->HGParams[robot->rId].centerZ;
+    double payload = shm->hgParams[robot->rId].payload;
+    double centerX = shm->hgParams[robot->rId].centerX;//PMC Modified 11501 //0127
+    double centerY = shm->hgParams[robot->rId].centerY;
+    double centerZ = shm->hgParams[robot->rId].centerZ;
     RobotSpec* spec = &(shm->robots[robot->rId].spec); //PMC Modified 11412 //1209
     /*
     //Wistron 7
@@ -435,10 +435,10 @@ void HG6Cobot::doGravity(double v[])
     // ----------------------------
     // 2) Build kinematics for payload coupling (uses real joint angles)
     // ----------------------------
-    const double payload = shm->HGParams[robot->rId].payload;
-    const double centerX = shm->HGParams[robot->rId].centerX;
-    const double centerY = shm->HGParams[robot->rId].centerY;
-    const double centerZ = shm->HGParams[robot->rId].centerZ;
+    const double payload = shm->hgParams[robot->rId].payload;
+    const double centerX = shm->hgParams[robot->rId].centerX;
+    const double centerY = shm->hgParams[robot->rId].centerY;
+    const double centerZ = shm->hgParams[robot->rId].centerZ;
 
     // If no payload mass, just return legacy output (plus fixed J6=0)
     if (payload <= 1e-9)

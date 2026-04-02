@@ -109,7 +109,7 @@ struct SHMData
 	eSyncState::e	syncTable[MAX_SYNC_NUM][MAX_ROBOT_NUM + 1]; // last Column for "ALL"
 
 	// ===== HandGuide ==== //PMC Modified 11410
-	HGParams		HGParams[MAX_ROBOT_NUM];
+	struct HGParams		hgParams[MAX_ROBOT_NUM];
 
 	// ===== IO =======
 	IOModuleData		ioModules		[MAX_IO_NUM];

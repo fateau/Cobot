@@ -1,48 +1,46 @@
+/*---------------------------------------------------------------------------
+ * ErrorHandler.cpp - Linux-compatible error handler implementation
+ *---------------------------------------------------------------------------*/
 #include "ErrorHandler.h"
 #include "Shm.h"
 #include "Def.h"
 #include "Debug.h"
 #include "EventHandler.h"
+#include <cstdio>
+#include <cstdarg>
+#include <cstring>
 
-//<目的> <2.0> ErrorHandler.m4a
-//<使用> <2.0> ErrorHandler.m4a
-//<設計> <2.0> ErrorHandler.m4a
 extern SHMData* shm;
 
-HANDLE	ErrorHandler::evtRTXError = EventHandler::Open("evtRTXError");
-char	ErrorHandler::msg[ERROR_MSG_LEN];
+void*   ErrorHandler::evtRTXError = nullptr;
+char    ErrorHandler::msg[ERROR_MSG_LEN];
 
 void ErrorHandler::Init()
 {
-	evtRTXError = EventHandler::Open("evtRTXError");
-
-	EventHandler::Reset(evtRTXError );
+    evtRTXError = EventHandler::Open("evtRTXError");
+    EventHandler::Reset(evtRTXError);
 }
 void ErrorHandler::Set()
 {
-	EventHandler::Set(evtRTXError);
+    EventHandler::Set(evtRTXError);
 }
-void ErrorHandler::Set(eError::e type, char* msgFormat, ...)
+void ErrorHandler::Set(eError::e type, const char* msgFormat, ...)
 {
-	// 劇本急停
-	shm->isSlowStop = false;
-	shm->stopScript = true;
+    // Immediate stop
+    shm->isSlowStop = false;
+    shm->stopScript = true;
 
-	// 處理訊息字串
-	va_list args;
-	va_start( args, msgFormat );
-	vsprintf( msg, msgFormat, args);	
-	va_end	( args );
-		
-		
-	SetInfo(type);
+    va_list args;
+    va_start(args, msgFormat);
+    vsnprintf(msg, ERROR_MSG_LEN, msgFormat, args);
+    va_end(args);
 
-	EventHandler::Set(evtRTXError);
+    SetInfo(type);
+    EventHandler::Set(evtRTXError);
 }
 void ErrorHandler::SetInfo(eError::e type)
 {
-	shm->errorCode = type;
-
-	strncpy(shm->errorMsg, msg, ERROR_MSG_LEN);	//訊息寫入Shm讓人機拿
-
+    shm->errorCode = type;
+    strncpy(shm->errorMsg, msg, ERROR_MSG_LEN);
+    shm->errorMsg[ERROR_MSG_LEN - 1] = '\0';
 }

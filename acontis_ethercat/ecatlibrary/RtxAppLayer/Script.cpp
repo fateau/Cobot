@@ -7,7 +7,7 @@
 #include "PathLoader.h"
 #include "Debug.h"
 #include "Kinematics.h"
-#include "SHM.h"
+#include "Shm.h"
 #include "ErrorHandler.h"
 
 extern SHMData* shm;
@@ -136,7 +136,8 @@ int  Script::tryToSetNewPath()
 	if(!isReadyToSetNextPath()) return 3;
 	if(shm->vGain == 0)			return -3; //don't set new path while pause.(因為vGain=0時, acc等初始參數的計算會有問題,尤其是S-Curve)
 
-	return setNewPath(pLoader->takePCmd());
+	ScriptPathCmd tmpPCmd = pLoader->takePCmd();
+	return setNewPath(tmpPCmd);
 }
 bool Script::isReadyToSetNextPath()
 {

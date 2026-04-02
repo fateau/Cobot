@@ -1,202 +1,210 @@
-﻿#pragma once
+#pragma once
 
+/*---------------------------------------------------------------------------
+ * Def.h - Common definitions for Linux/acontis EC-Master
+ *         Replaces Windows/KingStar definitions
+ *---------------------------------------------------------------------------*/
 
-#ifdef UNDER_RTSS
-	#define KING_STAR_IO			
-#else
-	#define WIN32_SIMULATE
-#endif
+// Platform define: Always use acontis on Linux
+#define ACONTIS_ECAT
 
-//==========================================
+#include <cstdint>
+#include <cstring>
+#include <cstdio>
+#include <cstdlib>
+#include <cmath>
+#include <climits>
+#include <pthread.h>
+#include <unistd.h>
 
-
-#include <Windows.h>
-#if defined UNDER_RTSS
-#include <Rtapi.h>
-#endif
-
-#include "Eigen\Dense"
+#include "Eigen/Dense"
 #include "MathTool.h"
-#include <stdint.h>
 
-#if defined KING_STAR_IO
-	#ifdef _AMD64_
-	#include "KingStarIO\coe64.h"
-	#else
-	#include "KingStarIO\coe32.h"
-	#endif
-typedef unsigned char	U8_T;
-typedef short			I16_T;
-typedef unsigned short	U16_T;   // 0 ~ 65535
-typedef unsigned int	U32_T;   // 0 ~ 4294967295
-#define RETURN return 0
+#include "ecatLayer.h"
 
-#elif defined WIN32_SIMULATE
-typedef unsigned char	U8_T;
-typedef short			I16_T;
-typedef unsigned short	U16_T;   // 0 ~ 65535
-typedef unsigned int	U32_T;   // 0 ~ 4294967295
-#define RETURN return
+typedef unsigned char   U8_T;
+typedef short           I16_T;
+typedef unsigned short  U16_T;   // 0 ~ 65535
+typedef unsigned int    U32_T;   // 0 ~ 4294967295
+typedef unsigned char   BYTE;
+typedef int             BOOL;
+typedef void*           HANDLE;
+typedef unsigned long*  LPDWORD;
+typedef void* (*LPTHREAD_START_ROUTINE)(void*);
+
+#ifndef TRUE
+#define TRUE  1
+#endif
+#ifndef FALSE
+#define FALSE 0
 #endif
 
-#define MAX_SLAVE_NUM		30	// slave = motor + io + adaptor + ...
-#define MAX_MOTOR_NUM		30
-#define MAX_IO_NUM			32	// io Module.
+// Windows compatibility
+#define INFINITE        0xFFFFFFFF
+#define WAIT_TIMEOUT    0x00000102
+#define WAIT_OBJECT_0   0x00000000
+#define CREATE_SUSPENDED 0x00000004
+
+#ifndef MAX_PATH
+#define MAX_PATH 260
+#endif
+
+#define Sleep(ms)  usleep((ms)*1000)
+
+#define RETURN return
+
+#define MAX_SLAVE_NUM       30  // slave = motor + io + adaptor + ...
+#define MAX_MOTOR_NUM       30
+#define MAX_IO_NUM          32  // io Module.
 #define MAX_INP_BYTE_PER_IO 4
 #define MAX_OUT_BYTE_PER_IO 4
 #define MAX_MOTOR_PER_ROBOT 7
-#define MAX_REDUNDANCY		7	// xyzabc 
-#define MAX_ROBOT_NUM		4
-#define MAX_TOOL_NUM		10
-#define MAX_BASE_NUM		10
-#define MAX_POINT_NUM		100
-#define MAX_SYNC_NUM		100
-#define MAX_IO_CMD_NUM		10
-#define ERROR_MSG_LEN		256 
+#define MAX_REDUNDANCY      7   // xyzabc
+#define MAX_ROBOT_NUM       4
+#define MAX_TOOL_NUM        10
+#define MAX_BASE_NUM        10
+#define MAX_POINT_NUM       100
+#define MAX_SYNC_NUM        100
+#define MAX_IO_CMD_NUM      10
+#define ERROR_MSG_LEN       256
 
-#define SAMPLING_T			1e-3
-#define SAMPLING_T_INV		1000
+#define SAMPLING_T          1e-3
+#define SAMPLING_T_INV      1000
 
 // vendorID
 #define SYNAPTICON  8914
 
 // Script
-#define RAWQ_SIZE	10
-#define PPQ_SIZE	10
+#define RAWQ_SIZE   10
+#define PPQ_SIZE    10
 #define INTPQ_SIZE  200
-#define INTPQ_REMAIN_NUM 200	// 遇到變速時，intpQ保留用來緩衝的個數
- 
-#define FIXED_FRAME 
+#define INTPQ_REMAIN_NUM 200
+
+#define FIXED_FRAME
 //#define EULER
 
 using namespace Eigen;
-// Note:如果用visual studio 2012, 就可以用scoped enum 語法:
-// enum class eSlaveType, 可在不同enum內重複命名。
+
 namespace eError
 {
-	enum e {
-		NONE,
-		SCRIPT,
-		IK_FAIL,			//1~99:軟體錯誤
-		ANGLE_LIMIT,
-		AXIS_JUMP,
-		TORQ_LIMIT, //add by yunyu 20250505
-		TORQ_COLLISION, //add by yunyu 20250505
-		DRIVER_ERROR = 100, //100~199:硬體錯誤
-		DRIVER_POWER_OFF,
-		LINK_BROKEN,
-	};
+    enum e {
+        NONE,
+        SCRIPT,
+        IK_FAIL,
+        ANGLE_LIMIT,
+        AXIS_JUMP,
+        TORQ_LIMIT,
+        TORQ_COLLISION,
+        DRIVER_ERROR = 100,
+        DRIVER_POWER_OFF,
+        LINK_BROKEN,
+    };
 }
 namespace eRTXState{
-	enum e {
-		CLOSE,
-		OPEN,
-		RUNNING
-	};
+    enum e {
+        CLOSE,
+        OPEN,
+        RUNNING
+    };
 }
 namespace eRTXMode{
-	enum e {
-		CSP = 8,
-		CST = 10
-	};
+    enum e {
+        CSP = 8,
+        CST = 10
+    };
 }
 namespace eRobotType{
-	enum e {
-		None  = 0,
-		Ext   = 600, //add by yunyu 20250502
-		Cobot = 800 //add by yunyu 20250401
-	};
+    enum e {
+        None  = 0,
+        Ext   = 600,
+        Cobot = 800
+    };
 };
 namespace eProject
 {
-	enum e{
-		NONE,
-		BASIC		//教學示範用，最陽春
-	};
+    enum e{
+        NONE,
+        BASIC
+    };
 };
 
-// 指令的型式
 namespace eTargetFormat {
-	enum e {
-		AXIS,
-		POSE
-	};
+    enum e {
+        AXIS,
+        POSE
+    };
 };
-namespace eCmdFormat { // 僅在 raw → path (鋪起、終點) 裡使用
-	enum e {
-		UNKNOWN,
-		AXIS,
-		POSE,
-		PT_TCP,
-		PT_AXIS
-	};
+namespace eCmdFormat {
+    enum e {
+        UNKNOWN,
+        AXIS,
+        POSE,
+        PT_TCP,
+        PT_AXIS
+    };
 };
 namespace eCmdSource {
-	enum e {
-		NONE,
-		JOG,
-		SCRIPT,
-		HANDGUIDE //add by yunyu 20250505
-	};
+    enum e {
+        NONE,
+        JOG,
+        SCRIPT,
+        HANDGUIDE
+    };
 };
 namespace eFrame {
-	enum e {
-		BASE,
-		TOOL
-	};
+    enum e {
+        BASE,
+        TOOL
+    };
 };
-// ToolBase
 namespace eToolBaseType {
-	enum e {
-		TOOL,
-		BASE
-	};
+    enum e {
+        TOOL,
+        BASE
+    };
 };
-
-// 劇本命令相關
 namespace eScriptCmdType {
-	enum e {
-		MOVE,
-		IO_OUT,
-		DELAY,
-		SYNC,
-		HMI_SYNC,
-		MS
-	};
+    enum e {
+        MOVE,
+        IO_OUT,
+        DELAY,
+        SYNC,
+        HMI_SYNC,
+        MS
+    };
 };
 namespace eMovePathType {
-	enum e {
-		JOINT,
-		P2P,
-		LINE,
-		CIRCLE,
-		
-	};	
+    enum e {
+        JOINT,
+        P2P,
+        LINE,
+        CIRCLE,
+    };
 };
 namespace ePlanAttitudeType {
-	enum e {
-		ABC,
-		R
-	};	
+    enum e {
+        ABC,
+        R
+    };
 };
 namespace ePlanAttitudeDescriptionType {
-	enum e {
-		EULER,
-		FIXED_FRAME
-	};	
+    enum e {
+        EULER,
+        FIXED_FRAME
+    };
 };
 namespace eJointType {
-	enum e{
-		REVOLUTE,
-		PRISMATIC
-	};
+    enum e{
+        REVOLUTE,
+        PRISMATIC
+    };
 };
 namespace eSyncState {
-	enum e{
-		NONE,
-		READY,
-		NOT_YET
-	};
+    enum e{
+        NONE,
+        READY,
+        NOT_YET
+    };
 };
 namespace eSyncType {
 	enum e{
@@ -239,7 +247,7 @@ struct DHtable
 	double alphaDeg		[MAX_MOTOR_PER_ROBOT];
 	double d			[MAX_MOTOR_PER_ROBOT];
 	double thetasInit	[MAX_MOTOR_PER_ROBOT]; //Home 角度
-	double thetaShiftDeg[MAX_MOTOR_PER_ROBOT]; 
+	double thetaShiftDeg[MAX_MOTOR_PER_ROBOT];
 
 	double axisPositiveLimit[MAX_MOTOR_PER_ROBOT];
 	double axisNegativeLimit[MAX_MOTOR_PER_ROBOT];
@@ -251,11 +259,11 @@ struct DHtable
 	void getT(Matrix4d &out_T, double axisDeg, int id)
 	{
 		double A, D, sa, ca, cs, ss;
-		id -= 1; 
+		id -= 1;
 
 		// A
 		A = a[id];
-			
+
 		// alpha
 		sa = sin( alphaDeg[id] * DEG2RAD);
 		ca = cos( alphaDeg[id] * DEG2RAD);
@@ -265,7 +273,7 @@ struct DHtable
 			case eJointType::REVOLUTE :
 				// D
 				D = d[id];
-			
+
 				// theta
 				ss = sin( axisDeg * DEG2RAD);
 				cs = cos( axisDeg * DEG2RAD);
@@ -274,23 +282,17 @@ struct DHtable
 			case eJointType::PRISMATIC :
 				// D
 				D = axisDeg; // deg → mm
-			
+
 				// theta
 				ss = sin( thetasInit[id] * DEG2RAD);
 				cs = cos( thetasInit[id] * DEG2RAD);
+				break;
 		}
-		
+
 		out_T(0,0) =	  cs;	out_T(0,1) =	 -ss;	out_T(0,2) =   0;    out_T(0,3) =		A;
 		out_T(1,0) = ss * ca;	out_T(1,1) = cs * ca;   out_T(1,2) = -sa;    out_T(1,3) = -sa * D;
-		out_T(2,0) = ss * sa;	out_T(2,1) = cs * sa;   out_T(2,2) =  ca;    out_T(2,3) =  ca * D;  
-		out_T(3,0) =	   0;	out_T(3,1) =	   0;   out_T(3,2) =   0;    out_T(3,3) =		1; 
-	    
-		/*
-			  [			 cos(θ)		  		 -sin(θ)		 0				  A	]
-		  T = [	sin(θ) * cos(α)		 cos(θ) * cos(α)	-sin(α)		-sin(α) * D	]
-			  [	sin(θ) * sin(α)		 cos(θ) * sin(α)	 cos(α)		 cos(α) * D	]
-			  [				 0					  0			 0				  1	]
-		*/
+		out_T(2,0) = ss * sa;	out_T(2,1) = cs * sa;   out_T(2,2) =  ca;    out_T(2,3) =  ca * D;
+		out_T(3,0) =	   0;	out_T(3,1) =	   0;   out_T(3,2) =   0;    out_T(3,3) =		1;
 	}
 };
 struct MSPose	//Master-Slave 的一組Pose
@@ -325,7 +327,7 @@ struct JogCmd
 	bool	isLimitDist;
 	double	acc;
 	int		ind;
-	double	vel;  
+	double	vel;
 	double	dist;
 };
 
@@ -364,7 +366,7 @@ struct CmdMoveRaw
 	int pointToolIndex;
 
 	double	Pose    [MAX_REDUNDANCY];
-	BOOL	PoseMask[MAX_REDUNDANCY];	
+	BOOL	PoseMask[MAX_REDUNDANCY];
 
 	double	axis    [MAX_MOTOR_PER_ROBOT];
 	BOOL	axisMask[MAX_MOTOR_PER_ROBOT];
@@ -372,7 +374,7 @@ struct CmdMoveRaw
 	double	Pose2[MAX_REDUNDANCY];		// for CIRCLE
 	double	theta;
 	int		pointBaseIndex2;
-	int		pointToolIndex2;	
+	int		pointToolIndex2;
 
 	MoveData mvData;
 };
@@ -397,7 +399,7 @@ struct CmdMove	//transferred from CmdMoveRaw
 
 	CircleData circle;
 	double	th_User; //User defined theta of the Circle-Path.
-	
+
 	double  maxVs[MAX_MOTOR_PER_ROBOT];  // 若maxV為百分比時，maxVs[i] =該軸額定轉速 * maxV/100。
 	double  maxAs[MAX_MOTOR_PER_ROBOT];  // 同maxVs.
 
@@ -459,7 +461,7 @@ struct IntpCmd //插補完的命令。可以在myCallBack直接喂給motor.
 	double	nowVs;			//此瞬間的速度
 	double  maxDecs;		//在降速區的最大降速度
 	bool	isFinalRegion;	//是否在降速區
-	bool	isContOverlap;	//是否在continue重疊區	
+	bool	isContOverlap;	//是否在continue重疊區
 	bool	isParallel;		//是否為平行命令 (處理時不占用1ms)
 
 	//type == 其他參數 io, delay, etc
@@ -477,7 +479,7 @@ struct HGParams
 	double KV[MAX_MOTOR_PER_ROBOT];
 	double KV0[MAX_MOTOR_PER_ROBOT];
 	//PMC Modified 11411 //1118
-	double KA[MAX_MOTOR_PER_ROBOT]; 
+	double KA[MAX_MOTOR_PER_ROBOT];
 	double KA0[MAX_MOTOR_PER_ROBOT];
 	double KC[MAX_MOTOR_PER_ROBOT];
 

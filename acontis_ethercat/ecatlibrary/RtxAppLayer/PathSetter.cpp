@@ -1,7 +1,7 @@
 #include "PathSetter.h"
 #include "HelpFunctions.h"
 #include "MathTool_Robot.h"
-#include "SHM.h"
+#include "Shm.h"
 
 extern SHMData* shm;
 PathSetterContext::PathSetterContext(int motorNum, int gestureNum)

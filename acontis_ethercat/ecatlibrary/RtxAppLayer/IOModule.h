@@ -1,4 +1,4 @@
-﻿#pragma once
+#pragma once
 #include "Def.h"
 
 
@@ -8,9 +8,7 @@ public:
 	IOModule(int mId, U16_T masterID, U16_T slaveAddr, int outNum, int inNum);
 	~IOModule(void){};
 
-	#if defined KING_STAR_IO
 	IO_ECAT*	kingIo;
-	#endif
 
 	int		outByteNum;
 	int		inpByteNum;
@@ -31,4 +29,3 @@ private:
 	BYTE*	outBytes;		// Ecat偵測到的值。指到shm->ioModules[mId].outBytes
 	BYTE*	outBytesCmd;	// 要輸出給Ecat的指令。指到shm->ioModules[mId].outBytesCmd 
 };
-

@@ -10,7 +10,7 @@
 #include "Kinematics.h"
 #include "HG6Cobot.h" //add by yunyu 20250423
 
-#include "SHM.h"
+#include "Shm.h"
 
 extern SHMData* shm;
 
@@ -118,8 +118,6 @@ int Robot::updateData()
 		inverseHT(base2World_T, world2Base_T);
 	}
 
-#if defined UNDER_RTSS
-	
 	if(shm->isApplyToRealMotor == true) {	//從馬達拉值。
 
 		double rawDeg[MAX_MOTOR_PER_ROBOT];
@@ -143,10 +141,6 @@ int Robot::updateData()
 	else {
 		setSimulationData();
 	}
-#else
-	setSimulationData();
-	
-#endif
 
 	//計算Pose (poseAtRoot)
 	kinMC->FK(poseAtRoot, axisDegNow, shm->jogToolIds[rId]); 
@@ -222,7 +216,6 @@ void Robot::writeNextAxisForAllMotors()
 
 	getaxisAccNow(); //PMC Modified 11411 //1114
 
-#if defined UNDER_RTSS
 	if(shm->isApplyToRealMotor == false) 
 		return;	
 		
@@ -237,7 +230,6 @@ void Robot::writeNextAxisForAllMotors()
 		motors[m]->setTargetDeg(rawDeg[m]);
 	}
 	CopyArray(axisDegCmdPrevAcc, axisDegCmd, motorNum);  //11501 PMC modified //0121
-#endif
 
 }
 void Robot::writeNextTorqForAllMotors()
@@ -294,8 +286,8 @@ void Robot::calculateTorq() //在不同模式(CSP.CST)下進入不同計算函�
 
 void Robot::updateCollisionState() //PMC Modified 11410
 {	
-	int* errorValue = shm->HGParams[rId].errorValue;
-	int  MaxTolerateTime = shm->HGParams[rId].MaxTolerateTime;
+	int* errorValue = shm->hgParams[rId].errorValue;
+	int  MaxTolerateTime = shm->hgParams[rId].MaxTolerateTime;
 	if(shm->CollisionMode[rId]){ 
 		if (shm->isScriptRunning){
 			for(int m=0;m<motorNum; m++){  // all axis
@@ -318,7 +310,6 @@ void Robot::updateCollisionState() //PMC Modified 11410
 
 void Robot::StartServoOnOff() //11412 PMC modified//1211
 {
-#if defined KING_STAR_IO
 	bool anyFault = false;
 	//檢查全部馬達是否錯誤
 	for (int m = 0; m < motorNum; m++) {
@@ -337,10 +328,6 @@ void Robot::StartServoOnOff() //11412 PMC modified//1211
 		}
 		motors[m]->StartServoOnOff();
 	}
-#else
-	for (int m = 0; m < motorNum; m++)
-		motors[m]->StartServoOnOff();
-#endif
 }
 
 void Robot::isServoOn()

@@ -1,7 +1,6 @@
 #pragma once
 #include <iostream>
-#include <windows.h>
-#include <process.h>
+#include <stdexcept>
 using namespace std;
 
 template <class T>
@@ -11,26 +10,26 @@ public:
 	MyQueueNoLock(int maxSize);
 	~MyQueueNoLock(void);
 
-	//±q§ÀºÝ¥[¤J
+	//ï¿½qï¿½ï¿½ï¿½Ý¥[ï¿½J
 	int  enqueue(T node);
 	
-	//±qÀY®³¥X
+	//ï¿½qï¿½Yï¿½ï¿½ï¿½X
 	int  dequeue(T* node);
 	int  dequeue();
 
-	//¥u¬Ý¤£®³
+	//ï¿½uï¿½Ý¤ï¿½ï¿½ï¿½
 	int  getNodeAtFront(T* node);
 	int  getNodeAtRear(T* node);
 
-	//¨ä¥L
+	//ï¿½ï¿½L
 	bool isEmpty();
 	bool isFull();
 	int  getCount();
 	void clearAll();
 
 private:
-	int f;		//front		//f+1¬°queueªº²Ä¤@­Ó
-	int r;		//rear		//r  ¬°queueªº³Ì«á¤@­Ó (³Ì·senqueueªÌ)
+	int f;		//front		//f+1ï¿½ï¿½queueï¿½ï¿½ï¿½Ä¤@ï¿½ï¿½
+	int r;		//rear		//r  ï¿½ï¿½queueï¿½ï¿½ï¿½Ì«ï¿½@ï¿½ï¿½ (ï¿½Ì·senqueueï¿½ï¿½)
 	T*	queue;
 	int _maxSize;
 };
@@ -41,7 +40,7 @@ MyQueueNoLock<T>::MyQueueNoLock(int maxSize)
 {
 	if(maxSize <=0) throw std::invalid_argument("MyQueueNoLock's size should be >0");
 
-	_maxSize	= maxSize+1;//Àôª¬ºtºâªk·|®ö¶O¤@­ÓªÅ¶¡
+	_maxSize	= maxSize+1;//ï¿½ï¿½ï¿½ï¿½ï¿½tï¿½ï¿½kï¿½|ï¿½ï¿½ï¿½Oï¿½@ï¿½ÓªÅ¶ï¿½
 	f			= 0;
 	r			= 0;
 	queue		= new T[_maxSize];

@@ -1,4 +1,4 @@
-﻿#include "MathTooL.h"
+﻿#include "MathTool.h"
 
 //====== trigonometric function (in degree)
 double sind(const double thetaDeg)
