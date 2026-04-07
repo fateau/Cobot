@@ -13,6 +13,7 @@
 #include <unistd.h>
 #include <dlfcn.h>
 #include <time.h>
+#include <errno.h>
 
 #include "EcMaster.h"
 
@@ -44,6 +45,8 @@ static void sigintHandler(int sig)
     (void)sig;
     printf("\nCaught SIGINT, shutting down...\n");
     if (shm) shm->stopRTX = true;
+    /* Wake up any blocking WaitFor (e.g. evtHMICommand in DetectSlave) */
+    if (sys) EventHandler::Set(sys->evtHMICommand);
 }
 
 
@@ -58,6 +61,7 @@ HANDLE	hScriptHMIThread       [MAX_ROBOT_NUM];
 HANDLE	hScriptPlanningThread  [MAX_ROBOT_NUM];
 HANDLE	hScriptInterpThread    [MAX_ROBOT_NUM];
 HANDLE	hLogThread;
+static bool g_bThreadsStarted = false;
 
 /* acontis specific */
 static volatile bool g_bJobTaskRunning  = false;
@@ -75,6 +79,7 @@ static bool          g_bDcmSyncToCycleStart = false;
 static bool          g_bDcmCsvLog       = false; /* save DCM log to CSV file */
 static FILE*         g_pDcmCsvFile      = NULL;
 static bool          g_bNoHmi           = false; /* no-HMI test mode */
+static char          g_szLogDir[256]    = "log"; /* log output directory */
 
 /* DCM MasterShift: cycle time adjustment for clock_nanosleep */
 #define NSEC_PER_SEC 1000000000
@@ -197,12 +202,14 @@ static EC_T_DWORD SetupPDO()
                 EC_T_WORD wReadEntries = 0;
                 dwRes = ecatGetSlaveOutpVarInfoEx(EC_TRUE, wStationAddr, wNumOutpVars, pOutVars, &wReadEntries);
                 if (EC_E_NOERROR == dwRes) {
+                    printf("  Slave addr=%u  OutVars=%u:", wStationAddr, wReadEntries);
                     for (EC_T_WORD i = 0; i < wReadEntries; i++) {
+                        printf(" 0x%04X(%ubits@%u)", pOutVars[i].wIndex, pOutVars[i].nBitSize, pOutVars[i].nBitOffs);
                         if (pOutVars[i].wIndex == DRV_OBJ_CONTROL_WORD) {
                             isMotorSlave = true;
-                            break;
                         }
                     }
+                    printf("%s\n", isMotorSlave ? " [MOTOR]" : "");
                 }
 
                 if (isMotorSlave && motorIdx < MAX_MOTOR_NUM) {
@@ -248,6 +255,10 @@ static EC_T_DWORD SetupPDO()
                 EC_T_WORD wReadEntries = 0;
                 dwRes = ecatGetSlaveInpVarInfoEx(EC_TRUE, wStationAddr, wNumInpVars, pInpVars, &wReadEntries);
                 if (EC_E_NOERROR == dwRes) {
+                    printf("  Slave addr=%u  InpVars=%u:", wStationAddr, wReadEntries);
+                    for (EC_T_WORD i = 0; i < wReadEntries; i++)
+                        printf(" 0x%04X(%ubits@%u)", pInpVars[i].wIndex, pInpVars[i].nBitSize, pInpVars[i].nBitOffs);
+                    printf("\n");
                     AXIS_ECAT* pAxis = &sys->axisEcat[motorIdx];
                     for (EC_T_WORD i = 0; i < wReadEntries; i++) {
                         EC_T_DWORD dwBitOff = pInpVars[i].nBitOffs;
@@ -804,7 +815,7 @@ int main(int argc, char *argv[])
     const char* szLinkLayer = "intelgbe"; /* link layer type */
     const char* szLinkArg1 = "1";  /* instance or device name */
     int linkMode = 1; /* 0=interrupt, 1=polling */
-    const char* szDcmCsvPath = "ecmaster_dcm.csv";
+    char szDcmCsvPath[512] = "";
 
     for (int i = 1; i < argc; i++) {
         if (strcmp(argv[i], "-f") == 0 && i + 1 < argc) {
@@ -862,7 +873,7 @@ int main(int argc, char *argv[])
         } else if (strcmp(argv[i], "-dcmlog") == 0) {
             g_bDcmCsvLog = true;
             if (i + 1 < argc && argv[i+1][0] != '-') {
-                szDcmCsvPath = argv[++i];
+                snprintf(szDcmCsvPath, sizeof(szDcmCsvPath), "%s/%s", g_szLogDir, argv[++i]);
             }
         } else if (strcmp(argv[i], "-nohmi") == 0) {
             g_bNoHmi = true;
@@ -899,6 +910,14 @@ int main(int argc, char *argv[])
         printf("Example: %s -f eni.xml -intelgbe 3 1 -b 1000 -a 3 -dcmmode mastershift 1 -dcmlog\n", argv[0]);
         return 1;
     }
+
+    /* Create log directory */
+    if (mkdir(g_szLogDir, 0755) == 0)
+        printf("Log directory created: %s\n", g_szLogDir);
+    else if (errno == EEXIST)
+        printf("Log directory: %s\n", g_szLogDir);
+    else
+        printf("Warning: cannot create log directory '%s': %s\n", g_szLogDir, strerror(errno));
 
     EventRegistry::Init();
     signal(SIGINT, sigintHandler);
@@ -1001,6 +1020,20 @@ int main(int argc, char *argv[])
 
         /* Transition to OP */
         if (!TransitionToOP()) goto Exit2;
+
+        /* Open DCM CSV log file */
+        if (g_bDcmCsvLog) {
+            if (szDcmCsvPath[0] == '\0')
+                snprintf(szDcmCsvPath, sizeof(szDcmCsvPath), "%s/ecmaster_dcm.csv", g_szLogDir);
+            g_pDcmCsvFile = fopen(szDcmCsvPath, "w");
+            if (g_pDcmCsvFile) {
+                /* Header will be written by ecatDcmGetLog on first call */
+                printf("DCM CSV log enabled: %s\n", szDcmCsvPath);
+            } else {
+                printf("Warning: cannot create DCM CSV log file: %s\n", szDcmCsvPath);
+                g_bDcmCsvLog = false;
+            }
+        }
 
         printf("\n");
         printf("============================================\n");
@@ -1120,11 +1153,11 @@ int main(int argc, char *argv[])
 
     /* 8. Open DCM CSV log file (after DCM configured, before job task starts) */
     if (g_bDcmCsvLog) {
+        if (szDcmCsvPath[0] == '\0')
+            snprintf(szDcmCsvPath, sizeof(szDcmCsvPath), "%s/ecmaster_dcm.csv", g_szLogDir);
         g_pDcmCsvFile = fopen(szDcmCsvPath, "w");
         if (g_pDcmCsvFile) {
-            /* Write CSV header matching acontis format */
-            fprintf(g_pDcmCsvFile, "Time [ms];SetVal [ns];BusTime [ns];ActVal [ns];CtlAdj;CtlErr [ns];CtlErrFilt;"
-                " Drift [ppm]; CtlErr [1/10 pmil]; CtlOutSum; CtlOutTot [pmil];DC StartTime;DCM ErrorCode;DCM InSync;DC InSync;SystemTimeDiff [ns];RefClock FixedAddr\n");
+            /* Header will be written by ecatDcmGetLog on first call */
             printf("DCM CSV log enabled: %s\n", szDcmCsvPath);
         } else {
             printf("Warning: cannot create DCM CSV log file: %s\n", szDcmCsvPath);
@@ -1135,11 +1168,17 @@ int main(int argc, char *argv[])
     /* 9. Open threads */
     if (!OpenLogThread())    goto Exit;
     if (!OpenScriptThread()) goto Exit;
+    g_bThreadsStarted = true;
 
     shm->RTXState = eRTXState::RUNNING;
 
     Sleep(100);
     Debug::writeln(0, "======== EtherCAT Master initialize successed. ==========\n");
+
+    /* Open log files in log directory */
+    Debug::openFile(2, g_szLogDir);
+    Debug::openFile(3, g_szLogDir);
+    Debug::openFile(4, g_szLogDir);
 
     /* Main loop: monitor servo on/off commands from HMI + DCM status */
     {
@@ -1196,7 +1235,7 @@ int main(int argc, char *argv[])
 
     Debug::flushToFile();
     Debug::closeFile();
-    if (!g_bNoHmi)
+    if (!g_bNoHmi && g_bThreadsStarted)
         closeThread();
 
 Exit:
