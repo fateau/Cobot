@@ -69,6 +69,8 @@ Robot::Robot(MySystem* sys, int rId, RobotDeclareData* data)
 		axisDegCmd[m]		= spec->DH.thetasInit[m];
 		axisDegCmdPrev[m]	= axisDegCmd[m];
 		axisTorqNow[m]		= 0;
+		gravityTorq[m]		= 0;
+		estimateTorq[m]		= 0;
 		axisVelCmd[m] = 0.0;  //PMC Modified 11411 //1114
 		axisVelCmdPrev[m] = 0.0;
 		axisAccNow[m] = 0.0;
@@ -138,38 +140,30 @@ int Robot::updateData()
 		//歸零補償
 		masteringDataAdd(axisDegNow, rawDeg);
 	}
-	else {
-		setSimulationData();
+
+	// Ext 類型(單軸)不需要 FK / 扭力估算 / 碰撞偵測（這些是 6軸 Cobot 專用）
+	if(robotType != eRobotType::Ext) {
+		kinMC->FK(poseAtRoot, axisDegNow, shm->jogToolIds[rId]); 
+
+		double world2Pose_T[4][4];
+		double  root2Pose_T[4][4];
+		
+		for(i = 6; i < gestureNum; i++)
+		{
+			poseAtBase [i] = poseAtRoot[i];
+			poseAtWorld[i] = poseAtRoot[i];
+		}
+
+		transferPose2T(root2Pose_T, poseAtRoot);
+		multiplyMatrix_4x4(world2Pose_T, world2Root_T, root2Pose_T);
+		transferT2Pose(poseAtWorld, world2Pose_T);
+
+		double base2Pose_T[4][4];
+		multiplyMatrix_4x4(base2Pose_T, base2World_T, world2Pose_T);
+		transferT2Pose(poseAtBase, base2Pose_T);
+		calculateTorq();
+		updateCollisionState();
 	}
-
-	//計算Pose (poseAtRoot)
-	kinMC->FK(poseAtRoot, axisDegNow, shm->jogToolIds[rId]); 
-
-	
-	// 人機顯示的 pose (poseAtWorld)
-	double world2Pose_T[4][4];
-	double  root2Pose_T[4][4];
-	
-	// 將 poseAtRoot 資料複製到 poseAtBase & poseAtWorld 裡 ,
-	// 是為了讓 poseAtBase & poseAtWorld 帶有 redundancy (RX,RY,...,RE) 的資訊 ,
-	// 因為 transferT2Pose 只能計算 XYZABC 
-	for(i = 6; i < gestureNum; i++)
-	{
-		poseAtBase [i] = poseAtRoot[i];
-		poseAtWorld[i] = poseAtRoot[i];
-	}
-
-	transferPose2T(root2Pose_T, poseAtRoot);
-	multiplyMatrix_4x4(world2Pose_T, world2Root_T, root2Pose_T);
-	transferT2Pose(poseAtWorld, world2Pose_T);
-
-
-	// 人機顯示的 pose (poseAtBase)
-	double base2Pose_T[4][4];
-	multiplyMatrix_4x4(base2Pose_T, base2World_T, world2Pose_T);
-	transferT2Pose(poseAtBase, base2Pose_T);
-	calculateTorq(); //add by yunyu 20250505
-	updateCollisionState(); //add by chilung 20250616
 
 	//將值寫到 shm. //設定下次要送出的預設值
 	RobotData* rData = &(shm->robots[rId]);
@@ -216,9 +210,6 @@ void Robot::writeNextAxisForAllMotors()
 
 	getaxisAccNow(); //PMC Modified 11411 //1114
 
-	if(shm->isApplyToRealMotor == false) 
-		return;	
-		
 	double rawDeg[MAX_MOTOR_PER_ROBOT];
 
 	//逆歸零補償
@@ -332,8 +323,10 @@ void Robot::StartServoOnOff() //11412 PMC modified//1211
 
 void Robot::isServoOn()
 {
-	for(int m = 0; m < motorNum; m++) 
+	for(int m = 0; m < motorNum; m++) {
 		shm->robots[rId].motors[m].isServoOn = motors[m]->isServoOn();
+		shm->robots[rId].motors[m].statusWord = motors[m]->getStatusWord();
+	}
 }
 bool Robot::isReachAngleLimit_next()
 {

@@ -30,6 +30,8 @@ struct MotorData
 	bool	isNeedSetPID;           // 旗標：通知 RTX 執行寫入 PID
 	bool	isNeedSaveParams;       // 旗標：通知 RTX 執行 Save to Flash
 	bool	isNeedReadPID;          // 旗標：通知 RTX 執行讀取 PID
+
+	unsigned short statusWord;      // DS402 StatusWord (從 Motor 複製)
 };
 struct RobotSpec
 {
@@ -127,4 +129,7 @@ struct SHMData
 
 	//== Homing Mode===
 	HomingData			homingData;
+
+	//== Cross-process HMI signaling (replaces Windows named events) ===
+	bool				hmiCommandReady;
 };

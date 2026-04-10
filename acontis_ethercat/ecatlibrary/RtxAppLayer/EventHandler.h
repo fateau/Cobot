@@ -232,4 +232,30 @@ public:
         pthread_cond_signal(&ta->suspendCond);
         pthread_mutex_unlock(&ta->suspendMutex);
     }
+
+    static bool Join(HANDLE thread, DWORD dwMilliSeconds)
+    {
+        ThreadArg* ta = (ThreadArg*)thread;
+        if (!ta) return true;
+        if (dwMilliSeconds == INFINITE) {
+            pthread_join(ta->tid, nullptr);
+            return true;
+        }
+        struct timespec ts;
+        clock_gettime(CLOCK_REALTIME, &ts);
+        ts.tv_sec  += dwMilliSeconds / 1000;
+        ts.tv_nsec += (dwMilliSeconds % 1000) * 1000000;
+        if (ts.tv_nsec >= 1000000000) { ts.tv_sec++; ts.tv_nsec -= 1000000000; }
+        int rc = pthread_timedjoin_np(ta->tid, nullptr, &ts);
+        return (rc == 0);
+    }
+
+    static void Delete(HANDLE thread)
+    {
+        ThreadArg* ta = (ThreadArg*)thread;
+        if (!ta) return;
+        pthread_mutex_destroy(&ta->suspendMutex);
+        pthread_cond_destroy(&ta->suspendCond);
+        delete ta;
+    }
 };

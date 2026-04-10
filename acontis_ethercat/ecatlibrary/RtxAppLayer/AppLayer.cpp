@@ -402,16 +402,17 @@ static void* EcMasterJobTaskWrapper(void* pvArg)
             if (shm && shm->RTXState == eRTXState::RUNNING)
             {
                 int masterState = (int)eMasterState;
+                shm->ecatState = masterState;
                 if (shm->stopRTX == (int)true) goto skip_workpd;
                 if (shm->ecatState != 8) goto skip_workpd;  /* 8 = OP */
-
-                shm->ecatState = masterState;
 
                 sys->processMotorStatus();
                 sys->ioGroup->updateData();
                 sys->isServoOn();
 
-                if (sys->updateData() < 0) {
+                int udRc = sys->updateData();
+
+                if (udRc < 0) {
                     shm->isSlowStop = false;
                     shm->stopScript = true;
                 }
@@ -489,8 +490,12 @@ bool OpenShareMemory()
         return false;
     }
     shm = (SHMData*)ptr;
+    memset(shm, 0, shm_size);  /* 清零所有殘留資料，避免髒旗標 */
     shm->stopRTX = false;
     shm->RTXState = eRTXState::OPEN;
+    shm->RTXMode = eRTXMode::CSP;
+    shm->isApplyToRealMotor = true;
+    shm->hmiCommandReady = false;
     printf("Open SharedMemory. SHMData size = %lu\n", (unsigned long)sizeof(SHMData));
     return true;
 }
@@ -740,9 +745,12 @@ bool DetectSlave()
     if (g_bNoHmi) {
         printf("[nohmi] Skipping HMI wait. Slave detection done.\n");
     } else {
-        /* Wait for HMI to complete mapping */
+        /* Wait for HMI to complete mapping via shared memory flag */
+        shm->hmiCommandReady = false;
         printf("Waiting for HMI mapping command...\n");
-        EventHandler::WaitFor(sys->evtHMICommand, INFINITE);
+        while (!shm->hmiCommandReady && !shm->stopRTX) {
+            usleep(10000); /* poll every 10ms */
+        }
     }
 
     if (shm->stopRTX) return false;
@@ -796,13 +804,26 @@ void StopJobTask()
 {
     g_bJobTaskShutdown = true;
     if (g_bJobTaskRunning) {
-        pthread_join(g_jobTaskThread, NULL);
+        struct timespec ts;
+        clock_gettime(CLOCK_REALTIME, &ts);
+        ts.tv_sec += 3;
+        int rc = pthread_timedjoin_np(g_jobTaskThread, NULL, &ts);
+        if (rc != 0) {
+            printf("[cleanup] Job task join timed out, cancelling.\n");
+            pthread_cancel(g_jobTaskThread);
+            usleep(100000);
+            pthread_detach(g_jobTaskThread);
+        }
+        g_bJobTaskRunning = false;
     }
 }
 
 void waitForHMI()
 {
-    EventHandler::WaitFor(sys->evtHMICommand, INFINITE);
+    shm->hmiCommandReady = false;
+    while (!shm->hmiCommandReady && !shm->stopRTX) {
+        usleep(10000);
+    }
 }
 
 /* ===================== Main  ========================= */
@@ -1113,7 +1134,7 @@ int main(int argc, char *argv[])
         printf("============================================\n\n");
 
         printf("Press Ctrl+C to exit...\n");
-
+        int cmd_cnt = 0;
         /* Simple monitoring loop — print state every 1 second */
         {
             while (!shm->stopRTX) {
@@ -1126,6 +1147,7 @@ int main(int argc, char *argv[])
                     printf("[nohmi] Master=%s  connected=%u/%u\n",
                         szMs, ecatGetNumConnectedSlaves(), ecatGetNumConfiguredSlaves());
                     /* Print live PDO values */
+                    
                     for (int m = 0; m < sys->slaveMotorNum; m++) {
                         AXIS_ECAT* pA = &sys->axisEcat[m];
                         printf("  Motor[%d] SW=0x%04X Pos=%-10d Vel=%-8d Trq=%-6d\n",
@@ -1134,9 +1156,34 @@ int main(int argc, char *argv[])
                             pA->pnActPosition ? *pA->pnActPosition : 0,
                             pA->pnActVelocity ? *pA->pnActVelocity : 0,
                             pA->pwActTorque   ? *pA->pwActTorque   : 0);
-                    }
-                
-                Sleep(1000);
+
+                        printf("cmd_cnt=%d\n", cmd_cnt);
+
+                        if (cmd_cnt < 1)
+                        {
+                            *pA->pbyModeOfOperation = 0x09; /* Cyclic Synchronous Position */
+                            *pA->pnTargetVelocity = 1000;
+                        }
+                        else if (cmd_cnt < 2)
+                        {
+                            *pA->pwControlWord = 0x06; /* Ready to Switch On */
+                        }
+                        else if (cmd_cnt < 3)
+                        {
+                            *pA->pwControlWord = 0x07; /* Switch On */
+                        }
+                        else if (cmd_cnt < 4)
+                        {
+                            *pA->pwControlWord = 0x0F; /* Enable Operation */
+                        }
+                        else if (cmd_cnt > 20)
+                        {
+                            *pA->pwControlWord = 0x06; /* Ready to Switch On */
+                            shm->stopRTX = true;
+                        }
+                        cmd_cnt++;
+                    }                
+                Sleep(1000); /* 1 second */
             }
         }
     } else {
@@ -1201,15 +1248,15 @@ int main(int argc, char *argv[])
                     EC_T_DWORD dwDcmRes = ecatDcmGetStatus(&dwDcmStatus, &nDiffCur, &nDiffAvg, &nDiffMax);
                     if (EC_E_NOERROR == dwDcmRes) {
                         if (bFirstDcmStatus) {
-                            printf("DCM first status after startup\\n");
+                            printf("DCM first status after startup\n");
                             ecatDcmResetStatus();
                             bFirstDcmStatus = false;
                         }
                         if (dwDcmStatus != EC_E_NOERROR && dwDcmStatus != EC_E_NOTREADY && dwDcmStatus != EC_E_BUSY) {
-                            printf("DCM Status: 0x%08X\\n", dwDcmStatus);
+                            printf("DCM Status: 0x%08X\n", dwDcmStatus);
                         }
                         if (g_bDcmLogEnabled) {
-                            printf("DCM Diff [nsec] cur/avg/max: %7d / %7d / %7d  %s\\n",
+                            printf("DCM Diff [nsec] cur/avg/max: %7d / %7d / %7d  %s\n",
                                 nDiffCur, nDiffAvg, nDiffMax,
                                 (dwDcmStatus == EC_E_NOERROR) ? "(InSync)" : "(NOT InSync)");
                         }
@@ -1239,13 +1286,51 @@ int main(int argc, char *argv[])
         closeThread();
 
 Exit:
-    /* Transition to INIT while job task is still running (frames must be processed) */
+    /* Transition to INIT with timeout (job task must still be running) */
     printf("[cleanup] Transitioning master to INIT...\n");
-    ecatSetMasterState(ETHERCAT_STATE_CHANGE_TIMEOUT, eEcatState_INIT);
+    {
+        static pthread_t tidTrans;
+        static auto transFunc = [](void*) -> void* {
+            ecatSetMasterState(3000, eEcatState_INIT);
+            return nullptr;
+        };
+        pthread_create(&tidTrans, NULL, transFunc, NULL);
+        struct timespec ts;
+        clock_gettime(CLOCK_REALTIME, &ts);
+        ts.tv_sec += 5;
+        if (pthread_timedjoin_np(tidTrans, NULL, &ts) != 0) {
+            printf("[cleanup] INIT transition timed out, skipping.\n");
+            pthread_cancel(tidTrans);
+            usleep(100000);
+            pthread_detach(tidTrans);
+        } else {
+            printf("[cleanup] Master transitioned to INIT.\n");
+        }
+    }
 
 Exit2:
+    printf("[cleanup] Stopping job task...\n");
     StopJobTask();
-    ecatDeinitMaster();
+    printf("[cleanup] Deinitializing master...\n");
+    {
+        static pthread_t tidDeinit;
+        static auto deinitFunc = [](void*) -> void* {
+            ecatDeinitMaster();
+            return nullptr;
+        };
+        pthread_create(&tidDeinit, NULL, deinitFunc, NULL);
+        struct timespec ts;
+        clock_gettime(CLOCK_REALTIME, &ts);
+        ts.tv_sec += 5;
+        if (pthread_timedjoin_np(tidDeinit, NULL, &ts) != 0) {
+            printf("[cleanup] ecatDeinitMaster timed out, skipping.\n");
+            pthread_cancel(tidDeinit);
+            usleep(100000);
+            pthread_detach(tidDeinit);
+        } else {
+            printf("[cleanup] Master deinitialized.\n");
+        }
+    }
 
     delete sys;
 Exit3:
@@ -1447,36 +1532,43 @@ bool OpenLogThread()
 
 void closeThread()
 {
+    /* Signal all events that threads may be blocking on */
     EventHandler::Set(sys->evtScriptStart);
-
     for (int r = 0; r < sys->robotNum; r++) {
+        EventHandler::Set(sys->evtScriptSet[r]);
+        EventHandler::Set(sys->evtScriptNeed[r]);
         ThreadHandler::Resume(hScriptHMIThread[r]);
         ThreadHandler::Resume(hScriptPlanningThread[r]);
         ThreadHandler::Resume(hScriptInterpThread[r]);
     }
 
-    if (EventHandler::WaitFor(hScriptStartThread, 3000) == WAIT_TIMEOUT)
+    /* Wait for threads to exit using pthread_join (not EventHandler::WaitFor) */
+    if (!ThreadHandler::Join(hScriptStartThread, 3000))
         printf("waitTimeOut! [hScriptStartThread]\n");
 
+    if (!ThreadHandler::Join(hLogThread, 3000))
+        printf("waitTimeOut! [hLogThread]\n");
+
     for (int r = 0; r < sys->robotNum; r++) {
-        if (EventHandler::WaitFor(hScriptHMIThread[r], 3000) == WAIT_TIMEOUT)
+        if (!ThreadHandler::Join(hScriptHMIThread[r], 3000))
             printf("waitTimeOut! [hScriptHMIThread%d]\n", r);
 
-        if (EventHandler::WaitFor(hScriptPlanningThread[r], 3000) == WAIT_TIMEOUT)
+        if (!ThreadHandler::Join(hScriptPlanningThread[r], 3000))
             printf("waitTimeOut! [hScriptPlanningThread%d]\n", r);
 
-        if (EventHandler::WaitFor(hScriptInterpThread[r], 3000) == WAIT_TIMEOUT)
+        if (!ThreadHandler::Join(hScriptInterpThread[r], 3000))
             printf("waitTimeOut! [hScriptInterpThread%d]\n", r);
     }
 
-    EventHandler::Close(hScriptStartThread);
-    EventHandler::Close(hLogThread);
+    /* Clean up thread handles */
+    ThreadHandler::Delete(hScriptStartThread);
+    ThreadHandler::Delete(hLogThread);
     EventHandler::Close(sys->evtScriptStart);
 
     for (int r = 0; r < sys->robotNum; r++) {
-        EventHandler::Close(hScriptHMIThread[r]);
-        EventHandler::Close(hScriptPlanningThread[r]);
-        EventHandler::Close(hScriptInterpThread[r]);
+        ThreadHandler::Delete(hScriptHMIThread[r]);
+        ThreadHandler::Delete(hScriptPlanningThread[r]);
+        ThreadHandler::Delete(hScriptInterpThread[r]);
         EventHandler::Close(sys->evtScriptSet[r]);
         EventHandler::Close(sys->evtScriptNeed[r]);
     }

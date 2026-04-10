@@ -148,7 +148,11 @@ void Motor::StartServoOnOff()
 {
     MotorData* motorData = &(shm->robots[rId].motors[mId]);
     if (motorData->isNeedServoOn) {
+        printf("[Motor r%d m%d] ServoON requested. statusWord=0x%04X linked=%d swPtr=%p\n",
+            rId, mId, _statusWord, (int)isLinkedToEcat,
+            kingAxis ? (void*)kingAxis->pwStatusWord : nullptr);
         if (_statusWord & 0x0008) {
+            printf("[Motor r%d m%d] Fault detected, sending fault reset\n", rId, mId);
             setControlWord(0x80);
             motorData->isNeedServoOn = false;
             hasPrintError = false;
@@ -158,6 +162,7 @@ void Motor::StartServoOnOff()
         servoOn();
     }
     else if (motorData->isNeedServoOff) {
+        printf("[Motor r%d m%d] ServoOFF requested\n", rId, mId);
         motorData->isNeedServoOff = false;
         servoOff();
     }
