@@ -482,6 +482,7 @@ bool OpenShareMemory()
             return false;
         }
     }
+    fchmod(fd, 0666);  /* 確保權限不受 umask 影響，讓 HMI (非 root) 可讀寫 */
 
     void* ptr = mmap(NULL, shm_size, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
     close(fd);

@@ -84,14 +84,17 @@ class MainWindow(QMainWindow):
         motor_group = QGroupBox("馬達即時數值")
         motor_layout = QVBoxLayout(motor_group)
         self.table = QTableWidget()
-        self.table.setColumnCount(6)
+        self.table.setColumnCount(7)
         self.table.setHorizontalHeaderLabels([
-            "軸", "StatusWord", "角度 (deg)", "速度 (deg/s)", "扭矩", "ServoOn"
+            "軸", "StatusWord", "角度 (deg)", "速度 (deg/s)", "扭矩", "ServoOn", "Servo 控制"
         ])
         self.table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
         self.table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
         motor_layout.addWidget(self.table)
         layout.addWidget(motor_group)
+
+        # Per-axis servo toggle buttons (created after table rows are set up)
+        self.servo_toggle_btns = []
 
         # Polling timer
         self.poll_timer = QTimer()
@@ -138,10 +141,16 @@ class MainWindow(QMainWindow):
         for btn in self.jog_btns:
             btn.setEnabled(True)
 
-        # Setup table rows
+        # Setup table rows + per-axis servo toggle buttons
         self.table.setRowCount(self.motor_num)
+        self.servo_toggle_btns.clear()
         for m in range(self.motor_num):
             self.table.setItem(m, 0, QTableWidgetItem(f"M{m}"))
+            btn = QPushButton("OFF")
+            btn.setStyleSheet("background-color: #f44336; color: white; font-weight: bold;")
+            btn.clicked.connect(lambda checked, axis=m: self._toggle_servo(axis))
+            self.table.setCellWidget(m, 6, btn)
+            self.servo_toggle_btns.append(btn)
 
         # Start polling at 10 Hz
         self.poll_timer.start(100)
@@ -184,6 +193,13 @@ class MainWindow(QMainWindow):
             return
         for m in range(self.motor_num):
             self.api.set_servo_on(0, m, False)
+
+    def _toggle_servo(self, axis: int):
+        """Toggle Servo ON/OFF for a single axis."""
+        if not self.connected:
+            return
+        current = self.api.get_is_servo_on(0, axis)
+        self.api.set_servo_on(0, axis, not current)
 
     # ── Jog Panel Builder ───────────────────────────────────────────────
     def _build_jog_panel(self, parent_layout):
@@ -307,6 +323,14 @@ class MainWindow(QMainWindow):
             self._set_cell(m, 3, f"{velocity[m]:.2f}")
             self._set_cell(m, 4, f"{torque[m]:.1f}")
             self._set_cell(m, 5, "ON" if servo_on else "OFF")
+            if m < len(self.servo_toggle_btns):
+                btn = self.servo_toggle_btns[m]
+                if servo_on:
+                    btn.setText("ON")
+                    btn.setStyleSheet("background-color: #4CAF50; color: white; font-weight: bold;")
+                else:
+                    btn.setText("OFF")
+                    btn.setStyleSheet("background-color: #f44336; color: white; font-weight: bold;")
 
     def _set_cell(self, row, col, text):
         item = self.table.item(row, col)
